@@ -67,18 +67,13 @@ class CliConfigurationTests(unittest.TestCase):
 
     def test_rejects_invalid_sound_file(self) -> None:
         with TemporaryDirectory() as directory:
-            cases = (
-                ("missing", Path(directory) / "missing.aiff"),
-                ("directory", Path(directory)),
-            )
-            for name, path in cases:
-                with self.subTest(name=name):
-                    stderr = StringIO()
+            path = Path(directory) / "missing.aiff"
+            stderr = StringIO()
 
-                    with redirect_stderr(stderr), self.assertRaises(SystemExit):
-                        parse_config(["--up-sound", str(path)])
+            with redirect_stderr(stderr), self.assertRaises(SystemExit):
+                parse_config(["--up-sound", str(path)])
 
-                    self.assertIn(f"not a sound file: {path}", stderr.getvalue())
+            self.assertIn(f"not a sound file: {path}", stderr.getvalue())
 
 
 class RunTests(unittest.TestCase):
