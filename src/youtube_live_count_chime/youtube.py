@@ -6,7 +6,6 @@ from http.client import IncompleteRead
 from json import JSONDecodeError, JSONDecoder
 import re
 from typing import Final, cast
-from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -52,7 +51,7 @@ def fetch_viewer_count(url: str) -> int:
     try:
         with urlopen(request, timeout=10.0) as response:
             page_html = response.read().decode("utf-8", errors="replace")
-    except (HTTPError, URLError, IncompleteRead, TimeoutError, OSError) as error:
+    except (IncompleteRead, OSError) as error:
         raise ViewerCountError(f"could not fetch the livestream page: {error}") from error
 
     return parse_viewer_count(page_html)

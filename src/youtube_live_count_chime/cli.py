@@ -9,18 +9,14 @@ import sys
 import time
 from typing import Final, Literal, Sequence, cast
 
-from youtube_live_count_chime.sounds import (
-    SoundConfigurationError,
-    SoundPlaybackError,
-    play_sound,
-    require_sound_file,
-)
+from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
 from youtube_live_count_chime.youtube import ViewerCountError, fetch_viewer_count
 
 
 DEFAULT_URL: Final = "https://www.youtube.com/watch?v=zUMYDcYRsFg"
-DEFAULT_UP_SOUND: Final = Path("/System/Library/Sounds/Glass.aiff")
-DEFAULT_DOWN_SOUND: Final = Path("/System/Library/Sounds/Basso.aiff")
+DEFAULT_UP_SOUND: Final = "/System/Library/Sounds/Glass.aiff"
+DEFAULT_DOWN_SOUND: Final = "/System/Library/Sounds/Basso.aiff"
+POLL_INTERVAL_SECONDS: Final = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,19 +24,15 @@ class Config:
     """Validated command-line configuration."""
 
     url: str
-    interval_seconds: float
     up_sound: Path
     down_sound: Path
 
 
-def _positive_interval(value: str) -> float:
-    try:
-        interval = float(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("interval must be a number") from error
-    if interval <= 0:
-        raise argparse.ArgumentTypeError("interval must be greater than zero")
-    return interval
+def _sound_file(value: str) -> Path:
+    path = Path(value)
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"not a sound file: {path}")
+    return path
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -51,9 +43,8 @@ def _build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("url", nargs="?", default=DEFAULT_URL)
-    parser.add_argument("--interval", type=_positive_interval, default=5.0)
-    parser.add_argument("--up-sound", type=Path, default=DEFAULT_UP_SOUND)
-    parser.add_argument("--down-sound", type=Path, default=DEFAULT_DOWN_SOUND)
+    parser.add_argument("--up-sound", type=_sound_file, default=DEFAULT_UP_SOUND)
+    parser.add_argument("--down-sound", type=_sound_file, default=DEFAULT_DOWN_SOUND)
     return parser
 
 
@@ -62,19 +53,11 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
     parser = _build_parser()
     namespace = parser.parse_args(argv)
     url = cast(str, namespace.url)
-    interval_seconds = cast(float, namespace.interval)
     up_sound = cast(Path, namespace.up_sound)
     down_sound = cast(Path, namespace.down_sound)
 
-    try:
-        require_sound_file(up_sound)
-        require_sound_file(down_sound)
-    except SoundConfigurationError as error:
-        parser.error(str(error))
-
     return Config(
         url=url,
-        interval_seconds=interval_seconds,
         up_sound=up_sound,
         down_sound=down_sound,
     )
@@ -106,7 +89,7 @@ def run(config: Config) -> int:
                             break
                         except SoundPlaybackError as error:
                             print(f"Warning: {error}", file=sys.stderr, flush=True)
-                            time.sleep(config.interval_seconds)
+                            time.sleep(POLL_INTERVAL_SECONDS)
                     print(
                         f"{previous} -> {current} ({direction})",
                         flush=True,
@@ -114,7 +97,7 @@ def run(config: Config) -> int:
                     previous = current
             except ViewerCountError as error:
                 print(f"Warning: {error}", file=sys.stderr, flush=True)
-            time.sleep(config.interval_seconds)
+            time.sleep(POLL_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
     return 0

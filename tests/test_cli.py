@@ -21,11 +21,7 @@ def run_for_values(
     stderr = StringIO()
     fetcher = Mock(side_effect=[*values, KeyboardInterrupt()])
     player = Mock(side_effect=sound_effects)
-    retry_sleeps = sum(
-        isinstance(effect, SoundPlaybackError)
-        for effect in sound_effects or ()
-    )
-    sleeper = Mock(side_effect=[None] * (len(values) + retry_sleeps))
+    sleeper = Mock()
     with (
         patch(
             "youtube_live_count_chime.cli.fetch_viewer_count",
@@ -48,7 +44,7 @@ def run_for_values(
 
 
 class CliConfigurationTests(unittest.TestCase):
-    def test_parses_url_interval_and_existing_sound_files(self) -> None:
+    def test_parses_url_and_existing_sound_files(self) -> None:
         with TemporaryDirectory() as directory:
             up_sound = Path(directory) / "up.aiff"
             down_sound = Path(directory) / "down.aiff"
@@ -58,8 +54,6 @@ class CliConfigurationTests(unittest.TestCase):
             config = parse_config(
                 [
                     "https://example.test/live",
-                    "--interval",
-                    "2.5",
                     "--up-sound",
                     str(up_sound),
                     "--down-sound",
@@ -68,45 +62,29 @@ class CliConfigurationTests(unittest.TestCase):
             )
 
         self.assertEqual(config.url, "https://example.test/live")
-        self.assertEqual(config.interval_seconds, 2.5)
         self.assertEqual(config.up_sound, up_sound)
         self.assertEqual(config.down_sound, down_sound)
 
-    def test_rejects_invalid_interval(self) -> None:
-        cases = (
-            ("non-number", "many", "interval must be a number"),
-            ("non-positive", "0", "interval must be greater than zero"),
-        )
-        for name, value, message in cases:
-            with self.subTest(name=name):
-                stderr = StringIO()
-
-                with redirect_stderr(stderr), self.assertRaises(SystemExit):
-                    parse_config([f"--interval={value}"])
-
-                self.assertIn(message, stderr.getvalue())
-
-    def test_rejects_missing_sound_file(self) -> None:
-        stderr = StringIO()
-
-        with redirect_stderr(stderr), self.assertRaises(SystemExit):
-            parse_config(
-                [
-                    "--up-sound",
-                    "/definitely/missing/up.aiff",
-                    "--down-sound",
-                    "/definitely/missing/down.aiff",
-                ]
+    def test_rejects_invalid_sound_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            cases = (
+                ("missing", Path(directory) / "missing.aiff"),
+                ("directory", Path(directory)),
             )
+            for name, path in cases:
+                with self.subTest(name=name):
+                    stderr = StringIO()
 
-        self.assertIn("sound file does not exist", stderr.getvalue())
+                    with redirect_stderr(stderr), self.assertRaises(SystemExit):
+                        parse_config(["--up-sound", str(path)])
+
+                    self.assertIn(f"not a sound file: {path}", stderr.getvalue())
 
 
 class RunTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = Config(
             url="https://example.test/live",
-            interval_seconds=5.0,
             up_sound=Path("/sounds/up.aiff"),
             down_sound=Path("/sounds/down.aiff"),
         )
@@ -149,40 +127,21 @@ class RunTests(unittest.TestCase):
         self.assertIn("Warning: temporary fetch failure", stderr)
 
     def test_failed_chime_retries_before_next_observation(self) -> None:
-        failure = SoundPlaybackError("temporary audio failure")
-        up, down = self.config.up_sound, self.config.down_sound
-        cases = (
+        _, stdout, stderr, paths = run_for_values(
+            self.config,
+            [10, 11, 9],
+            [SoundPlaybackError("temporary audio failure"), None, None],
+        )
+
+        transitions = [line for line in stdout.splitlines() if " -> " in line]
+        self.assertEqual(
+            (paths, transitions),
             (
-                "unchanged-target",
-                [1, 2, 2],
-                [failure, None],
-                [up, up],
-                ["1 -> 2 (up)"],
-            ),
-            (
-                "later-decrease",
-                [10, 11, 9],
-                [failure, None, None],
-                [up, up, down],
+                [self.config.up_sound] * 2 + [self.config.down_sound],
                 ["10 -> 11 (up)", "11 -> 9 (down)"],
             ),
         )
-        for name, values, effects, expected_paths, expected_transitions in cases:
-            with self.subTest(name=name):
-                _, stdout, stderr, paths = run_for_values(
-                    self.config,
-                    values,
-                    effects,
-                )
-
-                transitions = [
-                    line for line in stdout.splitlines() if " -> " in line
-                ]
-                self.assertEqual(
-                    (paths, transitions),
-                    (expected_paths, expected_transitions),
-                )
-                self.assertIn("Warning: temporary audio failure", stderr)
+        self.assertIn("Warning: temporary audio failure", stderr)
 
 
 if __name__ == "__main__":

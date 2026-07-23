@@ -38,12 +38,11 @@ Press `Ctrl-C` to stop.
 
 ## Options
 
-Pass the livestream URL explicitly or change the polling interval:
+Pass the livestream URL explicitly:
 
 ```bash
 .venv/bin/youtube-live-count-chime \
-  'https://www.youtube.com/watch?v=zUMYDcYRsFg' \
-  --interval 10
+  'https://www.youtube.com/watch?v=zUMYDcYRsFg'
 ```
 
 Use different audio files:
