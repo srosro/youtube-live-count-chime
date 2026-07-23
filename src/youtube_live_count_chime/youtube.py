@@ -16,7 +16,7 @@ USER_AGENT: Final = (
     "Chrome/126.0 Safari/537.36"
 )
 _RENDERER_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r'"videoViewCountRenderer"\s*:'
+    r'"videoViewCountRenderer"\s*:\s*'
 )
 _JSON_DECODER: Final = JSONDecoder()
 
@@ -25,20 +25,13 @@ class ViewerCountError(RuntimeError):
     """Raised when a valid live viewer count cannot be obtained."""
 
 
-def _decode_json_value(page_html: str, value_start: int) -> object | None:
-    while value_start < len(page_html) and page_html[value_start] in " \t\r\n":
-        value_start += 1
-    try:
-        value, _ = _JSON_DECODER.raw_decode(page_html, value_start)
-    except JSONDecodeError:
-        return None
-    return cast(object, value)
-
-
 def parse_viewer_count(page_html: str) -> int:
     """Extract the exact public live viewer count from YouTube page HTML."""
     for match in _RENDERER_PATTERN.finditer(page_html):
-        value = _decode_json_value(page_html, match.end())
+        try:
+            value = cast(object, _JSON_DECODER.raw_decode(page_html, match.end())[0])
+        except JSONDecodeError:
+            continue
         if isinstance(value, dict):
             renderer = cast(dict[str, object], value)
             count = renderer.get("originalViewCount")

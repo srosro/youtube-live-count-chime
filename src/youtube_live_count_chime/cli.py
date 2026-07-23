@@ -103,11 +103,10 @@ def run(config: Config) -> int:
                     while True:
                         try:
                             play_sound(sound)
+                            break
                         except SoundPlaybackError as error:
                             print(f"Warning: {error}", file=sys.stderr, flush=True)
                             time.sleep(config.interval_seconds)
-                        else:
-                            break
                     print(
                         f"{previous} -> {current} ({direction})",
                         flush=True,

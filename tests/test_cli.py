@@ -25,9 +25,7 @@ def run_for_values(
         isinstance(effect, SoundPlaybackError)
         for effect in sound_effects or ()
     )
-    sleeper = Mock(
-        side_effect=[None] * (len(values) + retry_sleeps)
-    )
+    sleeper = Mock(side_effect=[None] * (len(values) + retry_sleeps))
     with (
         patch(
             "youtube_live_count_chime.cli.fetch_viewer_count",
@@ -150,40 +148,41 @@ class RunTests(unittest.TestCase):
         self.assertIn("1 -> 2 (up)", stdout)
         self.assertIn("Warning: temporary fetch failure", stderr)
 
-    def test_failed_chime_is_retried_for_unchanged_count(self) -> None:
-        _, stdout, stderr, paths = run_for_values(
-            self.config,
-            [1, 2, 2],
-            [SoundPlaybackError("temporary audio failure"), None],
+    def test_failed_chime_retries_before_next_observation(self) -> None:
+        failure = SoundPlaybackError("temporary audio failure")
+        up, down = self.config.up_sound, self.config.down_sound
+        cases = (
+            (
+                "unchanged-target",
+                [1, 2, 2],
+                [failure, None],
+                [up, up],
+                ["1 -> 2 (up)"],
+            ),
+            (
+                "later-decrease",
+                [10, 11, 9],
+                [failure, None, None],
+                [up, up, down],
+                ["10 -> 11 (up)", "11 -> 9 (down)"],
+            ),
         )
+        for name, values, effects, expected_paths, expected_transitions in cases:
+            with self.subTest(name=name):
+                _, stdout, stderr, paths = run_for_values(
+                    self.config,
+                    values,
+                    effects,
+                )
 
-        self.assertEqual(
-            paths,
-            [self.config.up_sound, self.config.up_sound],
-        )
-        self.assertEqual(stdout.count("1 -> 2 (up)"), 1)
-        self.assertIn("Warning: temporary audio failure", stderr)
-
-    def test_failed_chime_is_delivered_before_next_observation(self) -> None:
-        _, stdout, stderr, paths = run_for_values(
-            self.config,
-            [10, 11, 9],
-            [SoundPlaybackError("temporary audio failure"), None, None],
-        )
-
-        self.assertEqual(
-            paths,
-            [
-                self.config.up_sound,
-                self.config.up_sound,
-                self.config.down_sound,
-            ],
-        )
-        self.assertLess(
-            stdout.index("10 -> 11 (up)"),
-            stdout.index("11 -> 9 (down)"),
-        )
-        self.assertIn("Warning: temporary audio failure", stderr)
+                transitions = [
+                    line for line in stdout.splitlines() if " -> " in line
+                ]
+                self.assertEqual(
+                    (paths, transitions),
+                    (expected_paths, expected_transitions),
+                )
+                self.assertIn("Warning: temporary audio failure", stderr)
 
 
 if __name__ == "__main__":

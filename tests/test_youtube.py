@@ -1,8 +1,7 @@
-from contextlib import nullcontext
 from http.client import IncompleteRead
 from pathlib import Path
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from youtube_live_count_chime.youtube import (
     ViewerCountError,
@@ -21,25 +20,22 @@ class ParseViewerCountTests(unittest.TestCase):
         self.assertEqual(parse_viewer_count(page_html), 1)
 
     def test_extracts_synthetic_live_counts(self) -> None:
+        key = '"videoViewCountRenderer":'
+        live = '{"isLive":true,"originalViewCount":"123"}'
         cases = (
             (
                 "multiple-digits",
-                '{"videoViewCountRenderer":'
-                '{"isLive":true,"originalViewCount":"12345"}}',
+                key + '{"isLive":true,"originalViewCount":"12345"}',
                 12_345,
             ),
             (
                 "unrelated-count-first",
-                '{"metadata":{"originalViewCount":"999"},'
-                '"videoViewCountRenderer":'
-                '{"isLive":true,"originalViewCount":"123"}}',
+                '"originalViewCount":"999",' + key + live,
                 123,
             ),
             (
                 "unparseable-renderer-first",
-                '"videoViewCountRenderer":not-json,'
-                '"videoViewCountRenderer":'
-                '{"isLive":true,"originalViewCount":"123"}',
+                key + "not-json," + key + live,
                 123,
             ),
         )
@@ -71,13 +67,10 @@ class ParseViewerCountTests(unittest.TestCase):
 
 class FetchViewerCountTests(unittest.TestCase):
     def test_normalizes_incomplete_response_to_viewer_count_error(self) -> None:
-        response = Mock()
-        response.read.side_effect = IncompleteRead(b"partial", 100)
-
         with (
             patch(
                 "youtube_live_count_chime.youtube.urlopen",
-                return_value=nullcontext(response),
+                side_effect=IncompleteRead(b"partial", 100),
             ),
             self.assertRaisesRegex(
                 ViewerCountError,
