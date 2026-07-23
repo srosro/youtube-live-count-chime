@@ -7,7 +7,7 @@ name = "youtube-live-count-chime"
 version = "0.1.0"
 description = "Play a macOS chime when a YouTube livestream viewer count changes."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["websockets>=15,<16"]
 
 [project.optional-dependencies]
 dev = ["mypy>=1.10,<2"]
