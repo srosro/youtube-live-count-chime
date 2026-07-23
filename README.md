@@ -16,7 +16,7 @@ uses mypy.
 ## Setup
 
 ```bash
-/Users/so/.local/bin/python3.11 -m venv .venv
+python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 ```
 

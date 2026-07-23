@@ -8,9 +8,8 @@ import math
 from pathlib import Path
 import sys
 import time
-from typing import Final, Protocol, Sequence, TextIO, cast
+from typing import Final, Literal, Sequence, cast
 
-from youtube_live_count_chime.monitor import Direction, Transition, Watcher
 from youtube_live_count_chime.sounds import (
     SoundConfigurationError,
     SoundPlaybackError,
@@ -33,41 +32,6 @@ class Config:
     interval_seconds: float
     up_sound: Path
     down_sound: Path
-
-
-class SoundPlayer(Protocol):
-    """Play one configured sound path."""
-
-    def __call__(self, path: Path) -> None:
-        """Play one sound."""
-        ...
-
-
-@dataclass(slots=True)
-class ChimeNotifier:
-    """Print transitions and play the configured direction-specific sound."""
-
-    config: Config
-    player: SoundPlayer
-    stdout: TextIO
-    stderr: TextIO
-
-    def __call__(self, transition: Transition) -> None:
-        print(
-            f"{transition.previous} -> {transition.current} "
-            f"({transition.direction.value})",
-            file=self.stdout,
-            flush=True,
-        )
-        sound = (
-            self.config.up_sound
-            if transition.direction is Direction.UP
-            else self.config.down_sound
-        )
-        try:
-            self.player(sound)
-        except SoundPlaybackError as error:
-            print(f"Warning: {error}", file=self.stderr, flush=True)
 
 
 def _positive_interval(value: str) -> float:
@@ -121,29 +85,32 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
 
 def run(config: Config) -> int:
     """Run until interrupted, retrying invalid observations without chiming."""
-    notifier = ChimeNotifier(
-        config=config,
-        player=play_sound,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-    )
-    watcher = Watcher(
-        source=lambda: fetch_viewer_count(config.url),
-        sink=notifier,
-    )
-    baseline_seen = False
+    previous: int | None = None
 
     print(f"Watching {config.url}", flush=True)
     try:
         while True:
             try:
-                count = watcher.poll()
-            except ViewerCountError as error:
+                current = fetch_viewer_count(config.url)
+                if previous is None:
+                    print(f"Baseline: {current} watching now", flush=True)
+                    previous = current
+                elif current != previous:
+                    direction: Literal["up", "down"]
+                    if current > previous:
+                        direction = "up"
+                        sound = config.up_sound
+                    else:
+                        direction = "down"
+                        sound = config.down_sound
+                    play_sound(sound)
+                    print(
+                        f"{previous} -> {current} ({direction})",
+                        flush=True,
+                    )
+                    previous = current
+            except (ViewerCountError, SoundPlaybackError) as error:
                 print(f"Warning: {error}", file=sys.stderr, flush=True)
-            else:
-                if not baseline_seen:
-                    print(f"Baseline: {count} watching now", flush=True)
-                    baseline_seen = True
             time.sleep(config.interval_seconds)
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)

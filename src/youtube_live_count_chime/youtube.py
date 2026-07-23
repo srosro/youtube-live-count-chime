@@ -63,14 +63,11 @@ def parse_viewer_count(page_html: str) -> int:
     raise ViewerCountError("live viewer count was not found in the page")
 
 
-def fetch_viewer_count(url: str, timeout_seconds: float = 10.0) -> int:
+def fetch_viewer_count(url: str) -> int:
     """Download a YouTube watch page and return its live viewer count."""
-    if timeout_seconds <= 0:
-        raise ValueError("timeout_seconds must be greater than zero")
-
     request = Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        with urlopen(request, timeout=10.0) as response:
             page_html = response.read().decode("utf-8", errors="replace")
     except (HTTPError, URLError, TimeoutError, OSError) as error:
         raise ViewerCountError(f"could not fetch the livestream page: {error}") from error
