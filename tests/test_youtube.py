@@ -5,7 +5,11 @@ from unittest.mock import patch
 
 from youtube_live_count_chime.youtube import (
     ViewerCountError,
+    YouTubeLivePage,
+    YouTubeSource,
+    fetch_live_page,
     fetch_viewer_count,
+    parse_live_page,
     parse_viewer_count,
 )
 
@@ -61,6 +65,50 @@ class ParseViewerCountTests(unittest.TestCase):
                 parse_viewer_count(page_html)
 
 
+class ParseLivePageTests(unittest.TestCase):
+    def test_extracts_canonical_live_video_and_viewers(self) -> None:
+        page_html = """
+        <link rel="canonical"
+              href="https://www.youtube.com/watch?v=afTqXQQhYrY">
+        <script>
+        {"videoViewCountRenderer":
+         {"isLive":true,"originalViewCount":"12"}}
+        </script>
+        """
+
+        page = parse_live_page(
+            page_html, "https://www.youtube.com/@watchmepivot/live"
+        )
+
+        self.assertEqual(page.video_id, "afTqXQQhYrY")
+        self.assertEqual(page.url, "https://www.youtube.com/watch?v=afTqXQQhYrY")
+        self.assertEqual(page.viewers, 12)
+
+    def test_uses_requested_watch_url_when_canonical_is_missing(self) -> None:
+        page = parse_live_page(
+            '{"videoViewCountRenderer":'
+            '{"isLive":true,"originalViewCount":"12"}}',
+            "https://www.youtube.com/watch?v=afTqXQQhYrY",
+        )
+
+        self.assertEqual(
+            page,
+            YouTubeLivePage(
+                video_id="afTqXQQhYrY",
+                url="https://www.youtube.com/watch?v=afTqXQQhYrY",
+                viewers=12,
+            ),
+        )
+
+    def test_rejects_page_without_a_live_video_id(self) -> None:
+        with self.assertRaisesRegex(ViewerCountError, "live video ID was not found"):
+            parse_live_page(
+                '{"videoViewCountRenderer":'
+                '{"isLive":true,"originalViewCount":"12"}}',
+                "https://www.youtube.com/@watchmepivot/live",
+            )
+
+
 class FetchViewerCountTests(unittest.TestCase):
     def test_normalizes_incomplete_response_to_viewer_count_error(self) -> None:
         with (
@@ -74,6 +122,27 @@ class FetchViewerCountTests(unittest.TestCase):
             ),
         ):
             fetch_viewer_count("https://example.test/live")
+
+
+class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_for_handle_yields_a_snapshot_for_the_normalized_target(self) -> None:
+        page = YouTubeLivePage(
+            video_id="afTqXQQhYrY",
+            url="https://www.youtube.com/watch?v=afTqXQQhYrY",
+            viewers=12,
+        )
+        with patch(
+            "youtube_live_count_chime.youtube.fetch_live_page", return_value=page
+        ) as fetcher:
+            source = YouTubeSource.for_handle("@watchmepivot")
+
+            snapshot = await anext(source.snapshots())
+
+        fetcher.assert_called_once_with("https://www.youtube.com/@watchmepivot/live")
+        self.assertEqual(snapshot.target.key, "youtube:watchmepivot")
+        self.assertEqual(snapshot.stream_id, "afTqXQQhYrY")
+        self.assertEqual(snapshot.viewers, 12)
+        self.assertEqual(snapshot.url, "https://www.youtube.com/watch?v=afTqXQQhYrY")
 
 
 if __name__ == "__main__":
