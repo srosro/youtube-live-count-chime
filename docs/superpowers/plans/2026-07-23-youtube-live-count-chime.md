@@ -19,6 +19,7 @@
 - Never chime or replace the last valid count after a failed fetch or parse.
 - Default to a five-second interval, `Glass.aiff` for increases, `Basso.aiff` for decreases, and `https://www.youtube.com/watch?v=zUMYDcYRsFg`.
 - Publish `main` to a private personal GitHub repository named `youtube-live-count-chime`.
+- Open a pull request from `feat/live-count-chime` to `main` and run the requested `/babysit-pr` workflow to convergence without merging unless separately authorized.
 
 ## File Map
 
@@ -1082,14 +1083,15 @@ Expected: the README is committed.
 
 ---
 
-### Task 5: Create and Verify the Private GitHub Repository
+### Task 5: Publish the Feature Branch and Open a Private Pull Request
 
 **Files:**
-- No file changes expected.
+- No tracked file changes expected.
 
 **Interfaces:**
-- Publishes: local `main` to `srosro/youtube-live-count-chime`
+- Publishes: local `main` and `feat/live-count-chime` to `srosro/youtube-live-count-chime`
 - Produces: `origin` pointing to the private GitHub repository
+- Produces: an open pull request from `feat/live-count-chime` into `main`
 
 - [ ] **Step 1: Verify local readiness and GitHub authentication**
 
@@ -1101,7 +1103,8 @@ git log --oneline --decorate -5
 gh auth status
 ```
 
-Expected: the worktree is clean on `main`, the implementation commits are present, and GitHub CLI reports the active `srosro` account.
+Expected: the worktree is clean on `feat/live-count-chime`, the implementation
+commits are present, and GitHub CLI reports the active `srosro` account.
 
 - [ ] **Step 2: Confirm the target repository name is available**
 
@@ -1111,27 +1114,80 @@ Run:
 gh repo view srosro/youtube-live-count-chime
 ```
 
-Expected: command exits non-zero with a repository-not-found response. If the repository already exists, inspect it and stop before changing its remote or contents.
+Expected: command exits non-zero with a repository-not-found response. If the
+repository already exists, inspect it and stop before changing its remote or
+contents.
 
-- [ ] **Step 3: Create the private repository and push `main`**
+- [ ] **Step 3: Create the empty private repository**
 
 Run:
 
 ```bash
-gh repo create youtube-live-count-chime --private --source=. --remote=origin --push
+gh repo create youtube-live-count-chime --private --source=. --remote=origin
 ```
 
-Expected: GitHub creates `srosro/youtube-live-count-chime`, adds `origin`, and pushes `main`.
+Expected: GitHub creates `srosro/youtube-live-count-chime` and adds `origin`
+without pushing a branch.
 
-- [ ] **Step 4: Verify privacy, default branch, remote, and pushed commit**
+- [ ] **Step 4: Push the baseline `main` branch and feature branch**
+
+Run:
+
+```bash
+git push origin main:main
+gh repo edit srosro/youtube-live-count-chime --default-branch main
+git push -u origin feat/live-count-chime
+```
+
+Expected: the documentation baseline is on remote `main`, the feature branch
+tracks `origin/feat/live-count-chime`, and GitHub reports `main` as the default
+branch.
+
+- [ ] **Step 5: Open the pull request**
+
+Create `/tmp/youtube-live-count-chime-pr-body.md`:
+
+```markdown
+## Summary
+
+- scrape the public YouTube livestream viewer count without runtime dependencies
+- play distinct macOS chimes for upward and downward count changes
+- provide strict typing, unit tests, configurable sounds, and setup documentation
+
+## Verification
+
+- `.venv/bin/python -m unittest discover -s tests -v`
+- `.venv/bin/mypy src tests`
+- `.venv/bin/youtube-live-count-chime --help`
+- live fetch/parsing smoke test against the configured livestream
+```
+
+Run:
+
+```bash
+gh pr create \
+  --base main \
+  --head feat/live-count-chime \
+  --title "feat: add YouTube live count chimes" \
+  --body-file /tmp/youtube-live-count-chime-pr-body.md
+```
+
+Expected: GitHub creates an open pull request and prints its URL.
+
+- [ ] **Step 6: Verify repository privacy, branch state, and pull request**
 
 Run:
 
 ```bash
 gh repo view srosro/youtube-live-count-chime --json nameWithOwner,isPrivate,url,defaultBranchRef
+gh pr view --json number,state,isDraft,baseRefName,headRefName,url
 git remote -v
 git status --short --branch
-test "$(git rev-parse HEAD)" = "$(gh api repos/srosro/youtube-live-count-chime/commits/main --jq .sha)"
+test "$(git rev-parse main)" = "$(gh api repos/srosro/youtube-live-count-chime/commits/main --jq .sha)"
+test "$(git rev-parse HEAD)" = "$(gh api repos/srosro/youtube-live-count-chime/commits/feat/live-count-chime --jq .sha)"
 ```
 
-Expected: `isPrivate` is `true`, the default branch is `main`, `origin` points to the new repository, the branch tracks `origin/main`, the worktree is clean, and local and remote commit SHAs match.
+Expected: `isPrivate` is `true`, the default branch is `main`, the PR is open
+and not a draft from `feat/live-count-chime` to `main`, `origin` points to the
+new repository, the feature branch tracks its remote, the worktree is clean, and
+both local branch SHAs match GitHub.
