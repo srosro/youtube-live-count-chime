@@ -68,5 +68,5 @@ than producing a false chime.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
-.venv/bin/mypy src tests
+.venv/bin/mypy
 ```

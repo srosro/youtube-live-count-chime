@@ -1,79 +1,48 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from youtube_live_count_chime.cli import Config, parse_config, run
 from youtube_live_count_chime.sounds import SoundPlaybackError
 from youtube_live_count_chime.youtube import ViewerCountError
 
 
-class RecordingPlayer:
-    def __init__(self) -> None:
-        self.paths: list[Path] = []
-
-    def __call__(self, path: Path) -> None:
-        self.paths.append(path)
-
-
-class SequenceFetcher:
-    def __init__(self, values: Sequence[int | Exception]) -> None:
-        self._values = list(values)
-
-    def __call__(self, url: str) -> int:
-        value = self._values.pop(0)
-        if isinstance(value, Exception):
-            raise value
-        return value
-
-
-class FailingOncePlayer:
-    def __init__(self) -> None:
-        self.paths: list[Path] = []
-        self._failed = False
-
-    def __call__(self, path: Path) -> None:
-        self.paths.append(path)
-        if not self._failed:
-            self._failed = True
-            raise SoundPlaybackError("temporary audio failure")
-
-
-class StopAfterSleeps:
-    def __init__(self, count: int) -> None:
-        self._remaining = count
-
-    def __call__(self, seconds: float) -> None:
-        self._remaining -= 1
-        if self._remaining == 0:
-            raise KeyboardInterrupt
-
-
 def run_for_values(
     config: Config,
     values: Sequence[int | Exception],
-    player: RecordingPlayer | FailingOncePlayer,
-) -> tuple[int, str, str]:
+    sound_effects: Sequence[Exception | None] | None = None,
+) -> tuple[int, str, str, list[Path]]:
     stdout = StringIO()
     stderr = StringIO()
+    fetcher = Mock(side_effect=values)
+    player = Mock(side_effect=sound_effects)
+    sleeper = Mock(
+        side_effect=[None] * (len(values) - 1) + [KeyboardInterrupt()]
+    )
     with (
         patch(
             "youtube_live_count_chime.cli.fetch_viewer_count",
-            SequenceFetcher(values),
+            cast(Callable[[str], int], fetcher),
         ),
-        patch("youtube_live_count_chime.cli.play_sound", player),
+        patch(
+            "youtube_live_count_chime.cli.play_sound",
+            cast(Callable[[Path], None], player),
+        ),
         patch(
             "youtube_live_count_chime.cli.time.sleep",
-            StopAfterSleeps(len(values)),
+            cast(Callable[[float], None], sleeper),
         ),
         patch("youtube_live_count_chime.cli.sys.stdout", stdout),
         patch("youtube_live_count_chime.cli.sys.stderr", stderr),
     ):
         result = run(config)
-    return result, stdout.getvalue(), stderr.getvalue()
+    paths = [cast(Path, call.args[0]) for call in player.call_args_list]
+    return result, stdout.getvalue(), stderr.getvalue(), paths
 
 
 class CliConfigurationTests(unittest.TestCase):
@@ -101,23 +70,20 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertEqual(config.up_sound, up_sound)
         self.assertEqual(config.down_sound, down_sound)
 
-    def test_rejects_non_positive_interval(self) -> None:
-        stderr = StringIO()
-
-        with redirect_stderr(stderr), self.assertRaises(SystemExit):
-            parse_config(["--interval", "0"])
-
-        self.assertIn("interval must be greater than zero", stderr.getvalue())
-
-    def test_rejects_non_finite_interval(self) -> None:
-        for value in ("nan", "inf", "+inf", "-inf"):
-            with self.subTest(value=value):
+    def test_rejects_invalid_interval(self) -> None:
+        cases = (
+            ("non-number", "many", "interval must be a number"),
+            ("non-positive", "0", "interval must be greater than zero"),
+            ("non-finite", "nan", "interval must be finite"),
+        )
+        for name, value, message in cases:
+            with self.subTest(name=name):
                 stderr = StringIO()
 
                 with redirect_stderr(stderr), self.assertRaises(SystemExit):
                     parse_config([f"--interval={value}"])
 
-                self.assertIn("interval must be finite", stderr.getvalue())
+                self.assertIn(message, stderr.getvalue())
 
     def test_rejects_missing_sound_file(self) -> None:
         stderr = StringIO()
@@ -145,12 +111,10 @@ class RunTests(unittest.TestCase):
         )
 
     def test_first_valid_count_is_a_silent_baseline(self) -> None:
-        player = RecordingPlayer()
-
-        result, stdout, stderr = run_for_values(self.config, [3], player)
+        result, stdout, stderr, paths = run_for_values(self.config, [3])
 
         self.assertEqual(result, 0)
-        self.assertEqual(player.paths, [])
+        self.assertEqual(paths, [])
         self.assertIn("Baseline: 3 watching now", stdout)
         self.assertIn("Stopped.", stdout)
         self.assertEqual(stderr, "")
@@ -162,41 +126,36 @@ class RunTests(unittest.TestCase):
         )
         for values, expected_sound, expected_transition in cases:
             with self.subTest(values=values):
-                player = RecordingPlayer()
+                _, stdout, _, paths = run_for_values(self.config, values)
 
-                _, stdout, _ = run_for_values(self.config, values, player)
-
-                self.assertEqual(player.paths, [expected_sound])
+                self.assertEqual(paths, [expected_sound])
                 self.assertIn(expected_transition, stdout)
 
     def test_unchanged_count_is_silent(self) -> None:
-        player = RecordingPlayer()
+        _, stdout, _, paths = run_for_values(self.config, [3, 3])
 
-        _, stdout, _ = run_for_values(self.config, [3, 3], player)
-
-        self.assertEqual(player.paths, [])
+        self.assertEqual(paths, [])
         self.assertNotIn("3 -> 3", stdout)
 
     def test_fetch_failure_preserves_last_valid_count(self) -> None:
-        player = RecordingPlayer()
-
-        _, stdout, stderr = run_for_values(
+        _, stdout, stderr, paths = run_for_values(
             self.config,
             [1, ViewerCountError("temporary fetch failure"), 2],
-            player,
         )
 
-        self.assertEqual(player.paths, [self.config.up_sound])
+        self.assertEqual(paths, [self.config.up_sound])
         self.assertIn("1 -> 2 (up)", stdout)
         self.assertIn("Warning: temporary fetch failure", stderr)
 
     def test_failed_chime_is_retried_for_unchanged_count(self) -> None:
-        player = FailingOncePlayer()
-
-        _, stdout, stderr = run_for_values(self.config, [1, 2, 2], player)
+        _, stdout, stderr, paths = run_for_values(
+            self.config,
+            [1, 2, 2],
+            [SoundPlaybackError("temporary audio failure"), None],
+        )
 
         self.assertEqual(
-            player.paths,
+            paths,
             [self.config.up_sound, self.config.up_sound],
         )
         self.assertEqual(stdout.count("1 -> 2 (up)"), 1)

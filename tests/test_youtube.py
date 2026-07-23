@@ -30,6 +30,15 @@ class ParseViewerCountTests(unittest.TestCase):
 
         self.assertEqual(parse_viewer_count(page_html), 123)
 
+    def test_skips_unparseable_renderer_before_valid_live_renderer(self) -> None:
+        page_html = (
+            '"videoViewCountRenderer":not-json,'
+            '"videoViewCountRenderer":'
+            '{"isLive":true,"originalViewCount":"123"}'
+        )
+
+        self.assertEqual(parse_viewer_count(page_html), 123)
+
     def test_rejects_invalid_renderers(self) -> None:
         cases = (
             (
