@@ -14,9 +14,32 @@ class ParseViewerCountTests(unittest.TestCase):
         self.assertEqual(parse_viewer_count(page_html), 1)
 
     def test_accepts_viewer_counts_with_multiple_digits(self) -> None:
-        page_html = '{"originalViewCount":"12345"}'
+        page_html = (
+            '{"videoViewCountRenderer":'
+            '{"isLive":true,"originalViewCount":"12345"}}'
+        )
 
         self.assertEqual(parse_viewer_count(page_html), 12_345)
+
+    def test_rejects_non_live_renderer(self) -> None:
+        page_html = (
+            '{"videoViewCountRenderer":'
+            '{"isLive":false,"originalViewCount":"123"}}'
+        )
+
+        with self.assertRaisesRegex(
+            ViewerCountError, "live viewer count was not found"
+        ):
+            parse_viewer_count(page_html)
+
+    def test_ignores_unrelated_count_before_live_renderer(self) -> None:
+        page_html = (
+            '{"metadata":{"originalViewCount":"999"},'
+            '"videoViewCountRenderer":'
+            '{"isLive":true,"originalViewCount":"123"}}'
+        )
+
+        self.assertEqual(parse_viewer_count(page_html), 123)
 
     def test_rejects_page_without_live_viewer_count(self) -> None:
         with self.assertRaisesRegex(
@@ -25,10 +48,15 @@ class ParseViewerCountTests(unittest.TestCase):
             parse_viewer_count("<html>not a livestream count</html>")
 
     def test_rejects_non_numeric_live_viewer_count(self) -> None:
+        page_html = (
+            '{"videoViewCountRenderer":'
+            '{"isLive":true,"originalViewCount":"many"}}'
+        )
+
         with self.assertRaisesRegex(
             ViewerCountError, "live viewer count was not found"
         ):
-            parse_viewer_count('{"originalViewCount":"many"}')
+            parse_viewer_count(page_html)
 
 
 if __name__ == "__main__":

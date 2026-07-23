@@ -1,3 +1,4 @@
+from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -41,11 +42,27 @@ class CliConfigurationTests(unittest.TestCase):
         self.assertEqual(config.down_sound, down_sound)
 
     def test_rejects_non_positive_interval(self) -> None:
-        with self.assertRaises(SystemExit):
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
             parse_config(["--interval", "0"])
 
+        self.assertIn("interval must be greater than zero", stderr.getvalue())
+
+    def test_rejects_non_finite_interval(self) -> None:
+        for value in ("nan", "inf", "+inf", "-inf"):
+            with self.subTest(value=value):
+                stderr = StringIO()
+
+                with redirect_stderr(stderr), self.assertRaises(SystemExit):
+                    parse_config([f"--interval={value}"])
+
+                self.assertIn("interval must be finite", stderr.getvalue())
+
     def test_rejects_missing_sound_file(self) -> None:
-        with self.assertRaises(SystemExit):
+        stderr = StringIO()
+
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
             parse_config(
                 [
                     "--up-sound",
@@ -54,6 +71,8 @@ class CliConfigurationTests(unittest.TestCase):
                     "/definitely/missing/down.aiff",
                 ]
             )
+
+        self.assertIn("sound file does not exist", stderr.getvalue())
 
 
 class ChimeNotifierTests(unittest.TestCase):

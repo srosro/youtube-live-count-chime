@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import sys
 import time
@@ -74,6 +75,8 @@ def _positive_interval(value: str) -> float:
         interval = float(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError("interval must be a number") from error
+    if not math.isfinite(interval):
+        raise argparse.ArgumentTypeError("interval must be finite")
     if interval <= 0:
         raise argparse.ArgumentTypeError("interval must be greater than zero")
     return interval
