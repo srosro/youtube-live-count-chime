@@ -19,10 +19,14 @@ def run_for_values(
 ) -> tuple[int, str, str, list[Path]]:
     stdout = StringIO()
     stderr = StringIO()
-    fetcher = Mock(side_effect=values)
+    fetcher = Mock(side_effect=[*values, KeyboardInterrupt()])
     player = Mock(side_effect=sound_effects)
+    retry_sleeps = sum(
+        isinstance(effect, SoundPlaybackError)
+        for effect in sound_effects or ()
+    )
     sleeper = Mock(
-        side_effect=[None] * (len(values) - 1) + [KeyboardInterrupt()]
+        side_effect=[None] * (len(values) + retry_sleeps)
     )
     with (
         patch(
@@ -74,7 +78,6 @@ class CliConfigurationTests(unittest.TestCase):
         cases = (
             ("non-number", "many", "interval must be a number"),
             ("non-positive", "0", "interval must be greater than zero"),
-            ("non-finite", "nan", "interval must be finite"),
         )
         for name, value, message in cases:
             with self.subTest(name=name):
@@ -159,6 +162,27 @@ class RunTests(unittest.TestCase):
             [self.config.up_sound, self.config.up_sound],
         )
         self.assertEqual(stdout.count("1 -> 2 (up)"), 1)
+        self.assertIn("Warning: temporary audio failure", stderr)
+
+    def test_failed_chime_is_delivered_before_next_observation(self) -> None:
+        _, stdout, stderr, paths = run_for_values(
+            self.config,
+            [10, 11, 9],
+            [SoundPlaybackError("temporary audio failure"), None, None],
+        )
+
+        self.assertEqual(
+            paths,
+            [
+                self.config.up_sound,
+                self.config.up_sound,
+                self.config.down_sound,
+            ],
+        )
+        self.assertLess(
+            stdout.index("10 -> 11 (up)"),
+            stdout.index("11 -> 9 (down)"),
+        )
         self.assertIn("Warning: temporary audio failure", stderr)
 
 

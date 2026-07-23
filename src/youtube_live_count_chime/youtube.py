@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from http.client import IncompleteRead
 from json import JSONDecodeError, JSONDecoder
+import re
 from typing import Final, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -13,7 +15,9 @@ USER_AGENT: Final = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0 Safari/537.36"
 )
-_RENDERER_KEY: Final = '"videoViewCountRenderer"'
+_RENDERER_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r'"videoViewCountRenderer"\s*:'
+)
 _JSON_DECODER: Final = JSONDecoder()
 
 
@@ -21,14 +25,7 @@ class ViewerCountError(RuntimeError):
     """Raised when a valid live viewer count cannot be obtained."""
 
 
-def _decode_json_value_after_key(page_html: str, key_end: int) -> object | None:
-    value_start = key_end
-    while value_start < len(page_html) and page_html[value_start] in " \t\r\n":
-        value_start += 1
-    if value_start >= len(page_html) or page_html[value_start] != ":":
-        return None
-
-    value_start += 1
+def _decode_json_value(page_html: str, value_start: int) -> object | None:
     while value_start < len(page_html) and page_html[value_start] in " \t\r\n":
         value_start += 1
     try:
@@ -40,14 +37,8 @@ def _decode_json_value_after_key(page_html: str, key_end: int) -> object | None:
 
 def parse_viewer_count(page_html: str) -> int:
     """Extract the exact public live viewer count from YouTube page HTML."""
-    search_start = 0
-    while True:
-        key_start = page_html.find(_RENDERER_KEY, search_start)
-        if key_start == -1:
-            break
-
-        key_end = key_start + len(_RENDERER_KEY)
-        value = _decode_json_value_after_key(page_html, key_end)
+    for match in _RENDERER_PATTERN.finditer(page_html):
+        value = _decode_json_value(page_html, match.end())
         if isinstance(value, dict):
             renderer = cast(dict[str, object], value)
             count = renderer.get("originalViewCount")
@@ -58,7 +49,6 @@ def parse_viewer_count(page_html: str) -> int:
                 and count.isdigit()
             ):
                 return int(count)
-        search_start = key_end
 
     raise ViewerCountError("live viewer count was not found in the page")
 
@@ -69,7 +59,7 @@ def fetch_viewer_count(url: str) -> int:
     try:
         with urlopen(request, timeout=10.0) as response:
             page_html = response.read().decode("utf-8", errors="replace")
-    except (HTTPError, URLError, TimeoutError, OSError) as error:
+    except (HTTPError, URLError, IncompleteRead, TimeoutError, OSError) as error:
         raise ViewerCountError(f"could not fetch the livestream page: {error}") from error
 
     return parse_viewer_count(page_html)
