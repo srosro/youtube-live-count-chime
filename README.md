@@ -22,7 +22,7 @@ uses mypy.
 
 ## Run
 
-The configured livestream is the default:
+The configured livestream is the default, and it polls every five seconds:
 
 ```bash
 .venv/bin/youtube-live-count-chime
