@@ -102,7 +102,9 @@ class CountTracker:
 class StreamSource(Protocol):
     """An asynchronous source of stream snapshots."""
 
-    name: str
+    @property
+    def name(self) -> str:
+        """Return a stable display name for this source."""
 
     def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield successive stream snapshots."""
