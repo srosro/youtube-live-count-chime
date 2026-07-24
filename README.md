@@ -27,7 +27,7 @@ Pass one or more channels with repeatable `-y`/`--youtube` (handle) and
 `-t`/`--twitch` (login) flags. It polls every five seconds by default:
 
 ```bash
-.venv/bin/youtube-live-count-chime -y @mkbhd -y LinusTechTips -t shroud
+.venv/bin/youtube-live-count-chime -y @srosrosr -y @watchmepivot -t watchmepivot -t samtriestobuild
 ```
 
 For each channel, the first valid count is a silent baseline. After that:
@@ -105,7 +105,7 @@ at all.)
 
 ```bash
 .venv/bin/youtube-live-count-chime \
-  -y @mkbhd -t shroud \
+  -y @srosrosr -t watchmepivot \
   --up-sound /path/to/increase.aiff \
   --down-sound /path/to/decrease.aiff \
   --poll-interval 10
