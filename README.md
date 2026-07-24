@@ -24,7 +24,7 @@ python3 -m venv .venv
 ## Run
 
 Pass one or more channels with repeatable `-y`/`--youtube` (handle) and
-`-t`/`--twitch` (login) flags. It polls every five seconds by default:
+`-t`/`--twitch` (login) flags. It polls every five seconds:
 
 ```bash
 .venv/bin/youtube-live-count-chime -y @srosrosr -y @watchmepivot -t watchmepivot -t samtriestobuild
@@ -55,7 +55,7 @@ app-only access token (no per-user browser login):
    inline, where it lands in shell history):
 
    ```bash
-   # twitch.env — add to .gitignore, then: source twitch.env
+   # twitch.env (already git-ignored) — then: source twitch.env
    export TWITCH_CLIENT_ID="your-client-id"
    export TWITCH_CLIENT_SECRET="your-client-secret"
    ```
@@ -107,8 +107,7 @@ at all.)
 .venv/bin/youtube-live-count-chime \
   -y @srosrosr -t watchmepivot \
   --up-sound /path/to/increase.aiff \
-  --down-sound /path/to/decrease.aiff \
-  --poll-interval 10
+  --down-sound /path/to/decrease.aiff
 ```
 
 Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.

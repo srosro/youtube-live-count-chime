@@ -5,7 +5,7 @@ import json
 import os
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from urllib.error import HTTPError
 from urllib.request import Request
 
@@ -212,16 +212,21 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
             TwitchSource.for_login("@", TwitchClient(CREDS))
 
     async def test_yields_live_then_offline_snapshots(self) -> None:
-        source = TwitchSource.for_login("Shroud", TwitchClient(CREDS), poll_interval=0.0)
+        source = TwitchSource.for_login("Shroud", TwitchClient(CREDS))
         payloads: Iterator[object] = iter(
             (
                 {"data": [{"id": "1", "user_login": "shroud", "viewer_count": 10}]},
                 {"data": []},
             )
         )
-        with patch(
-            "youtube_live_count_chime.twitch.TwitchClient.stream",
-            side_effect=lambda target: parse_stream(next(payloads), target),
+        with (
+            patch(
+                "youtube_live_count_chime.twitch.TwitchClient.stream",
+                side_effect=lambda target: parse_stream(next(payloads), target),
+            ),
+            patch(
+                "youtube_live_count_chime.twitch.asyncio.sleep", new_callable=AsyncMock
+            ),
         ):
             seen = []
             async for snapshot in source.snapshots():

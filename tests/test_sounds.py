@@ -1,27 +1,38 @@
 from pathlib import Path
+import subprocess
 import unittest
 from unittest.mock import patch
 
-from youtube_live_count_chime.sounds import play_sound
+from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
 
 
 class PlaySoundTests(unittest.TestCase):
-    def test_passes_requested_volume_to_afplay(self) -> None:
+    def test_invokes_afplay_with_the_path(self) -> None:
         with patch("youtube_live_count_chime.sounds.subprocess.run") as run:
-            play_sound(Path("/sounds/up.aiff"), volume=1.5)
+            play_sound(Path("/sounds/up.aiff"))
 
         run.assert_called_once_with(
-            ("/usr/bin/afplay", "-v", "1.5", "/sounds/up.aiff"),
+            ("/usr/bin/afplay", "/sounds/up.aiff"),
             check=True,
             stdout=-3,
             stderr=-1,
             text=True,
         )
 
-    def test_rejects_non_positive_or_non_finite_volume(self) -> None:
-        for volume in (0.0, -1.0, float("inf"), float("-inf"), float("nan")):
-            with self.subTest(volume=volume), self.assertRaises(ValueError):
-                play_sound(Path("/sounds/up.aiff"), volume=volume)
+    def test_playback_failure_becomes_sound_playback_error(self) -> None:
+        # Both arms of the catch: a non-zero afplay exit and afplay being
+        # missing/not executable (OSError).
+        failures: tuple[Exception, ...] = (
+            subprocess.CalledProcessError(1, "afplay", stderr="boom"),
+            FileNotFoundError("afplay not found"),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                with patch(
+                    "youtube_live_count_chime.sounds.subprocess.run", side_effect=failure
+                ):
+                    with self.assertRaises(SoundPlaybackError):
+                        play_sound(Path("/sounds/up.aiff"))
 
 
 if __name__ == "__main__":

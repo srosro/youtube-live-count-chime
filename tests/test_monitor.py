@@ -1,9 +1,12 @@
+import io
 import unittest
 from collections.abc import AsyncIterator
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarget
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
+from youtube_live_count_chime.sounds import SoundPlaybackError
 
 
 UP = Path("/System/Library/Sounds/Glass.aiff")
@@ -57,6 +60,58 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             play=played.append,
         )
         self.assertEqual(played, [UP])  # a 1->2 up; b unchanged; baselines silent
+
+    async def test_prints_the_transition_in_order(self) -> None:
+        a = StreamTarget(Platform.YOUTUBE, "chan")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            await monitor(
+                [FakeSource("youtube:chan", [live(a, 5), live(a, 9)])],
+                ChimeConfig(UP, DOWN),
+                play=lambda path: None,
+            )
+        # Pins previous->current order and the up/down word (a swap would show
+        # "9 -> 5" or "(down)").
+        self.assertIn("youtube:chan: 5 -> 9 (up)", buffer.getvalue())
+
+    async def test_reset_then_resume_chiming(self) -> None:
+        a = StreamTarget(Platform.YOUTUBE, "a")
+        played: list[Path] = []
+        await monitor(
+            [
+                FakeSource(
+                    "youtube:a",
+                    [
+                        live(a, 5),  # baseline
+                        StreamSnapshot.offline(a),  # offline clears the baseline
+                        live(a, 9),  # fresh baseline after the reset (silent)
+                        StreamSnapshot(a, "s2", 20),  # different stream re-baselines
+                        StreamSnapshot(a, "s2", 25),  # same stream 20->25 -> chimes
+                    ],
+                )
+            ],
+            ChimeConfig(UP, DOWN),
+            play=played.append,
+        )
+        # Every reset step is silent, and chiming resumes on the next real delta.
+        self.assertEqual(played, [UP])
+
+    async def test_playback_failure_warns_and_keeps_watching(self) -> None:
+        a = StreamTarget(Platform.YOUTUBE, "a")
+
+        def boom(path: Path) -> None:
+            raise SoundPlaybackError("audio device gone")
+
+        # A transient audio failure must not tear the watcher down: both deltas
+        # (1->2 and 2->3) are attempted, each warned and skipped, and monitor
+        # completes normally. Two warnings pins that it kept going after the first.
+        with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
+            await monitor(
+                [FakeSource("youtube:a", [live(a, 1), live(a, 2), live(a, 3)])],
+                ChimeConfig(UP, DOWN),
+                play=boom,
+            )
+        self.assertEqual(len(logs.records), 2)
 
     async def test_unexpected_source_error_stops_the_watcher(self) -> None:
         healthy = StreamTarget(Platform.YOUTUBE, "a")

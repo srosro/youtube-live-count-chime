@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from youtube_live_count_chime.models import CountTracker, StreamSource
+from youtube_live_count_chime.models import StreamSnapshot, StreamSource
 from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
 
 
@@ -28,40 +28,49 @@ async def monitor(
     sources: Sequence[StreamSource],
     config: ChimeConfig,
     *,
-    tracker: CountTracker | None = None,
     play: Callable[[Path], None] = play_sound,
 ) -> None:
     """Watch every source concurrently, chiming once per viewer-count change.
 
-    Sources swallow and retry their own fetch failures, so an exception that
-    escapes one is an unexpected bug: the TaskGroup cancels the siblings and
-    propagates it (as an ``ExceptionGroup``) so ``main`` reports it and exits
-    non-zero rather than silently absorbing it.
+    Each source has one consumer that keeps the previous live snapshot and
+    chimes when the same stream's count moves. A playback failure (e.g. the
+    output device switching mid-chime) is warned and skipped so one channel's
+    audio glitch never stops the watcher. Any other exception escaping a
+    source is an unexpected bug: the TaskGroup cancels the siblings and
+    ``main`` reports it (named with the channel) and exits non-zero.
     """
-    shared_tracker = tracker if tracker is not None else CountTracker()
     chime_lock = asyncio.Lock()
 
     async def consume(source: StreamSource) -> None:
+        previous: StreamSnapshot | None = None
         try:
             async for snapshot in source.snapshots():
-                change = shared_tracker.observe(snapshot)
-                if change is None:
+                if snapshot.stream_id is None:
+                    previous = None
                     continue
-                sound = (
-                    config.up_sound if change.direction == "up" else config.down_sound
-                )
-                print(
-                    f"{source.name}: {change.previous} -> {change.current} "
-                    f"({change.direction})",
-                    flush=True,
-                )
-                async with chime_lock:
-                    try:
-                        await asyncio.to_thread(play, sound)
-                    except SoundPlaybackError as error:
-                        _LOGGER.warning(
-                            "could not play chime for %s: %s", source.name, error
-                        )
+                assert snapshot.viewers is not None  # live snapshot invariant
+                if (
+                    previous is not None
+                    and previous.stream_id == snapshot.stream_id
+                    and previous.viewers != snapshot.viewers
+                ):
+                    assert previous.viewers is not None
+                    rising = snapshot.viewers > previous.viewers
+                    direction = "up" if rising else "down"
+                    sound = config.up_sound if rising else config.down_sound
+                    print(
+                        f"{source.name}: {previous.viewers} -> {snapshot.viewers} "
+                        f"({direction})",
+                        flush=True,
+                    )
+                    async with chime_lock:
+                        try:
+                            await asyncio.to_thread(play, sound)
+                        except SoundPlaybackError as error:
+                            _LOGGER.warning(
+                                "could not play chime for %s: %s", source.name, error
+                            )
+                previous = snapshot
         except Exception as error:
             # Name the channel in the failure that main will report.
             raise RuntimeError(f"source {source.name} failed") from error

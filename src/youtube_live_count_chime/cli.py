@@ -6,7 +6,6 @@ import argparse
 import asyncio
 from dataclasses import dataclass
 import logging
-import math
 from pathlib import Path
 import sys
 from typing import Final, Sequence, cast
@@ -24,7 +23,6 @@ from youtube_live_count_chime.youtube import YouTubeSource
 
 DEFAULT_UP_SOUND: Final = "/System/Library/Sounds/Glass.aiff"
 DEFAULT_DOWN_SOUND: Final = "/System/Library/Sounds/Basso.aiff"
-DEFAULT_POLL_INTERVAL: Final = 5.0
 _LOGGER: Final = logging.getLogger(__name__)
 
 
@@ -36,7 +34,6 @@ class Config:
     twitch: tuple[str, ...]
     up_sound: Path
     down_sound: Path
-    poll_interval: float
 
 
 def _sound_file(value: str) -> Path:
@@ -44,13 +41,6 @@ def _sound_file(value: str) -> Path:
     if not path.is_file():
         raise argparse.ArgumentTypeError(f"not a sound file: {path}")
     return path
-
-
-def _poll_interval(value: str) -> float:
-    interval = float(value)
-    if not math.isfinite(interval) or interval <= 0:
-        raise argparse.ArgumentTypeError("poll interval must be finite and positive")
-    return interval
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -89,12 +79,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_DOWN_SOUND,
         help="sound played when a viewer count falls",
     )
-    parser.add_argument(
-        "--poll-interval",
-        type=_poll_interval,
-        default=DEFAULT_POLL_INTERVAL,
-        help="seconds between polls of each channel",
-    )
     return parser
 
 
@@ -106,7 +90,6 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         twitch=tuple(cast("list[str]", namespace.twitch)),
         up_sound=cast(Path, namespace.up_sound),
         down_sound=cast(Path, namespace.down_sound),
-        poll_interval=cast(float, namespace.poll_interval),
     )
 
 
@@ -128,12 +111,12 @@ def build_sources(config: Config) -> list[StreamSource]:
             sources.append(source)
 
     for handle in config.youtube:
-        add(YouTubeSource.for_handle(handle, poll_interval=config.poll_interval))
+        add(YouTubeSource.for_handle(handle))
 
     if config.twitch:
         client = TwitchClient(TwitchCredentials.from_env())
         for login in config.twitch:
-            add(TwitchSource.for_login(login, client, poll_interval=config.poll_interval))
+            add(TwitchSource.for_login(login, client))
 
     return sources
 

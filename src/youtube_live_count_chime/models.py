@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
 import re
-from typing import Final, Literal, Protocol, Self
+from typing import Final, Protocol, Self
 
 
 # YouTube handles allow letters, digits, ., _, - ; Twitch logins are a subset.
@@ -14,6 +14,10 @@ from typing import Final, Literal, Protocol, Self
 # safe to interpolate straight into the fetch URL. The 30-char bound (YouTube's
 # max; Twitch's is 25) rejects long charset-valid junk that would 404 every poll.
 _HANDLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9._-]{1,30}")
+
+# Seconds between polls of each channel — the single source of truth for both
+# sources' cadence.
+POLL_INTERVAL_SECONDS: Final = 5.0
 
 
 class Platform(StrEnum):
@@ -59,7 +63,6 @@ class StreamSnapshot:
     target: StreamTarget
     stream_id: str | None
     viewers: int | None
-    url: str | None = None
 
     def __post_init__(self) -> None:
         if (self.stream_id is None) != (self.viewers is None):
@@ -68,59 +71,9 @@ class StreamSnapshot:
             raise ValueError("viewers cannot be negative")
 
     @classmethod
-    def offline(cls, target: StreamTarget, *, url: str | None = None) -> Self:
+    def offline(cls, target: StreamTarget) -> Self:
         """Create an offline snapshot for a stream target."""
-        return cls(target, None, None, url=url)
-
-
-@dataclass(frozen=True, slots=True)
-class ViewerChange:
-    """A viewer-count change observed during one stream."""
-
-    target: StreamTarget
-    stream_id: str
-    previous: int
-    current: int
-
-    @property
-    def direction(self) -> Literal["up", "down"]:
-        """Return the direction of the change."""
-        return "up" if self.current > self.previous else "down"
-
-
-class CountTracker:
-    """Track the latest live snapshot for each target."""
-
-    def __init__(self) -> None:
-        self._current: dict[StreamTarget, StreamSnapshot] = {}
-
-    def current(self, target: StreamTarget) -> StreamSnapshot | None:
-        """Return the target's latest live snapshot, if any."""
-        return self._current.get(target)
-
-    def observe(self, snapshot: StreamSnapshot) -> ViewerChange | None:
-        """Record a snapshot and return a viewer-count change when it occurs."""
-        if snapshot.stream_id is None:
-            self._current.pop(snapshot.target, None)
-            return None
-
-        previous = self._current.get(snapshot.target)
-        self._current[snapshot.target] = snapshot
-        if (
-            previous is None
-            or previous.stream_id != snapshot.stream_id
-            or previous.viewers == snapshot.viewers
-        ):
-            return None
-
-        assert previous.viewers is not None
-        assert snapshot.viewers is not None
-        return ViewerChange(
-            snapshot.target,
-            snapshot.stream_id,
-            previous.viewers,
-            snapshot.viewers,
-        )
+        return cls(target, None, None)
 
 
 class StreamSource(Protocol):

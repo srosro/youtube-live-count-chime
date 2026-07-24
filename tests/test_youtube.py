@@ -1,14 +1,13 @@
 from http.client import BadStatusLine, IncompleteRead
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from youtube_live_count_chime.youtube import (
     ViewerCountError,
     YouTubeLivePage,
     YouTubeSource,
     fetch_live_page,
-    fetch_viewer_count,
     parse_live_page,
     parse_viewer_count,
 )
@@ -81,7 +80,6 @@ class ParseLivePageTests(unittest.TestCase):
         )
 
         self.assertEqual(page.video_id, "afTqXQQhYrY")
-        self.assertEqual(page.url, "https://www.youtube.com/watch?v=afTqXQQhYrY")
         self.assertEqual(page.viewers, 12)
 
     def test_uses_requested_watch_url_when_canonical_is_missing(self) -> None:
@@ -91,14 +89,41 @@ class ParseLivePageTests(unittest.TestCase):
             "https://www.youtube.com/watch?v=afTqXQQhYrY",
         )
 
-        self.assertEqual(
-            page,
-            YouTubeLivePage(
-                video_id="afTqXQQhYrY",
-                url="https://www.youtube.com/watch?v=afTqXQQhYrY",
-                viewers=12,
-            ),
+        self.assertEqual(page, YouTubeLivePage(video_id="afTqXQQhYrY", viewers=12))
+
+    def test_accepts_video_id_ending_in_dash(self) -> None:
+        # An 11-char ID whose final character is '-' must still match — the
+        # trailing boundary in the pattern can't rely on a word boundary there.
+        page = parse_live_page(
+            '<link rel="canonical" href="https://www.youtube.com/watch?v=abcdefghij-">'
+            '{"videoViewCountRenderer":{"isLive":true,"originalViewCount":"5"}}',
+            "https://www.youtube.com/@x/live",
         )
+
+        self.assertEqual(page.video_id, "abcdefghij-")
+
+    def test_accepts_video_id_followed_by_query_params(self) -> None:
+        # The old pattern's `&` alternative existed for this; the lookahead
+        # passes it (`&` is outside the ID character class).
+        page = parse_live_page(
+            '<link rel="canonical" href="https://www.youtube.com/watch?v=afTqXQQhYrY&t=42">'
+            '{"videoViewCountRenderer":{"isLive":true,"originalViewCount":"5"}}',
+            "https://www.youtube.com/@x/live",
+        )
+
+        self.assertEqual(page.video_id, "afTqXQQhYrY")
+
+    def test_rejects_truncatable_over_length_video_id(self) -> None:
+        # A 12th char of '-' must not truncate to a bogus 11-char ID: the old
+        # `\b` pattern matched a boundary before the '-' and returned
+        # "abcdefghijk" ('_' is a word char, so the old pattern already
+        # rejected that variant); the lookahead rejects '-' too.
+        with self.assertRaisesRegex(ViewerCountError, "live video ID was not found"):
+            parse_live_page(
+                '<link rel="canonical" href="https://www.youtube.com/watch?v=abcdefghijk-x">'
+                '{"videoViewCountRenderer":{"isLive":true,"originalViewCount":"5"}}',
+                "https://www.youtube.com/@x/live",
+            )
 
     def test_rejects_page_without_a_live_video_id(self) -> None:
         with self.assertRaisesRegex(ViewerCountError, "live video ID was not found"):
@@ -109,7 +134,7 @@ class ParseLivePageTests(unittest.TestCase):
             )
 
 
-class FetchViewerCountTests(unittest.TestCase):
+class FetchLivePageTests(unittest.TestCase):
     def test_normalizes_http_client_failures_to_viewer_count_error(self) -> None:
         # IncompleteRead and BadStatusLine are both http.client.HTTPException
         # subtypes; the latter is not an OSError, so it needs the widened catch.
@@ -125,16 +150,12 @@ class FetchViewerCountTests(unittest.TestCase):
                         "could not fetch the livestream page",
                     ),
                 ):
-                    fetch_viewer_count("https://example.test/live")
+                    fetch_live_page("https://example.test/live")
 
 
 class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_for_handle_yields_a_snapshot_for_the_normalized_target(self) -> None:
-        page = YouTubeLivePage(
-            video_id="afTqXQQhYrY",
-            url="https://www.youtube.com/watch?v=afTqXQQhYrY",
-            viewers=12,
-        )
+        page = YouTubeLivePage(video_id="afTqXQQhYrY", viewers=12)
         with patch(
             "youtube_live_count_chime.youtube.fetch_live_page", return_value=page
         ) as fetcher:
@@ -146,7 +167,6 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.target.key, "youtube:watchmepivot")
         self.assertEqual(snapshot.stream_id, "afTqXQQhYrY")
         self.assertEqual(snapshot.viewers, 12)
-        self.assertEqual(snapshot.url, "https://www.youtube.com/watch?v=afTqXQQhYrY")
 
     def test_for_handle_normalizes_prefix_and_case(self) -> None:
         self.assertEqual(YouTubeSource.for_handle("@MKBHD").name, "youtube:mkbhd")
@@ -159,12 +179,17 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
             YouTubeSource.for_handle("mkbhd/videos")
 
     async def test_snapshots_warns_and_retries_after_a_fetch_error(self) -> None:
-        page = YouTubeLivePage("vid", "https://www.youtube.com/watch?v=vid", 7)
-        with patch(
-            "youtube_live_count_chime.youtube.fetch_live_page",
-            side_effect=[ViewerCountError("boom"), page],
-        ) as fetcher:
-            source = YouTubeSource.for_handle("@x", poll_interval=0.0)
+        page = YouTubeLivePage("vid", 7)
+        with (
+            patch(
+                "youtube_live_count_chime.youtube.fetch_live_page",
+                side_effect=[ViewerCountError("boom"), page],
+            ) as fetcher,
+            patch(
+                "youtube_live_count_chime.youtube.asyncio.sleep", new_callable=AsyncMock
+            ),
+        ):
+            source = YouTubeSource.for_handle("@x")
 
             with self.assertLogs("youtube_live_count_chime.youtube", "WARNING"):
                 snapshot = await anext(source.snapshots())

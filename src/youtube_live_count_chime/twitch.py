@@ -13,10 +13,11 @@ import os
 import threading
 from typing import Final, Self, cast
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from youtube_live_count_chime.models import (
+    POLL_INTERVAL_SECONDS,
     Platform,
     StreamSnapshot,
     StreamTarget,
@@ -82,16 +83,15 @@ def parse_stream(payload: object, target: StreamTarget) -> StreamSnapshot:
     if not isinstance(data, list):
         raise TwitchError("invalid Twitch streams response")
 
-    url = f"https://www.twitch.tv/{quote(target.name, safe='')}"
     if not data:
-        return StreamSnapshot.offline(target, url=url)
+        return StreamSnapshot.offline(target)
 
     entry = _object_dict(cast(list[object], data)[0])
     stream_id = entry.get("id") if entry is not None else None
     viewers = _strict_int(entry.get("viewer_count")) if entry is not None else None
     if not isinstance(stream_id, str) or not stream_id or viewers is None or viewers < 0:
         raise TwitchError("invalid Twitch stream entry")
-    return StreamSnapshot(target, stream_id, viewers, url=url)
+    return StreamSnapshot(target, stream_id, viewers)
 
 
 def _get_json(request: Request) -> object:
@@ -195,24 +195,12 @@ class TwitchSource:
     name: str
     target: StreamTarget
     client: TwitchClient
-    poll_interval: float = 5.0
 
     @classmethod
-    def for_login(
-        cls,
-        login: str,
-        client: TwitchClient,
-        *,
-        poll_interval: float = 5.0,
-    ) -> Self:
+    def for_login(cls, login: str, client: TwitchClient) -> Self:
         """Create a source that polls one Twitch login, sharing one app token."""
         target = StreamTarget(Platform.TWITCH, normalize_handle(login))
-        return cls(
-            name=target.key,
-            target=target,
-            client=client,
-            poll_interval=poll_interval,
-        )
+        return cls(name=target.key, target=target, client=client)
 
     async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield live/offline snapshots, retrying request failures after each poll."""
@@ -223,4 +211,4 @@ class TwitchSource:
                 _LOGGER.warning("could not fetch Twitch stream for %s: %s", self.name, error)
             else:
                 yield snapshot
-            await asyncio.sleep(self.poll_interval)
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
