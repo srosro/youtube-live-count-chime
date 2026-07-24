@@ -51,11 +51,12 @@ app-only access token (no per-user browser login):
 
 1. Create an application at <https://dev.twitch.tv/console/apps>.
 2. Copy its **Client ID** and generate a **Client Secret**.
-3. Export both before running:
+3. Export both before running (avoid inlining the secret into shell history —
+   prefer a sourced env file or your shell's history-off prefix):
 
    ```bash
-   export TWITCH_CLIENT_ID=…
-   export TWITCH_CLIENT_SECRET=…
+   export TWITCH_CLIENT_ID=<your-client-id>
+   export TWITCH_CLIENT_SECRET=<your-client-secret>
    ```
 
 The watcher exchanges these for an application token via the
@@ -79,10 +80,12 @@ Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 
 Each platform exposes a current total, not individual join and departure events.
 A join and a departure between polls can cancel out, and only the resulting
-displayed count is observable. If a page or API response cannot be parsed, the
-watcher warns and retains the previous valid count rather than producing a false
-chime. Monitoring is limited to publicly live channels; ended streams read as
-offline and reset that channel's baseline.
+displayed count is observable. Monitoring is limited to publicly live channels.
+The platforms signal an ended stream differently: Twitch reports it as offline
+and goes silent (the baseline resets), while YouTube's live page simply stops
+parsing, so the watcher warns each poll and keeps the last count until a new
+stream appears. A page or API response that cannot be parsed is likewise warned
+and skipped rather than turned into a false chime.
 
 ## Development
 
