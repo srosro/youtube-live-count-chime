@@ -1,12 +1,13 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "youtube-live-count-chime"
 version = "0.1.0"
-description = "Play a macOS chime when a YouTube livestream viewer count changes."
+description = "Play a macOS chime when a YouTube or Twitch live viewer count changes."
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = []
 
 [project.optional-dependencies]

@@ -1,14 +1,15 @@
-# YouTube Live Count Chime
+# Live Count Chime
 
-A small, strictly typed macOS command-line watcher that plays one sound when a
-YouTube livestream's displayed viewer count increases and a different sound when
-it decreases.
+A small, strictly typed macOS command-line watcher that monitors the live viewer
+count of multiple YouTube and Twitch channels at once and plays one sound when a
+count increases and a different sound when it decreases.
 
 ## Requirements
 
 - macOS
 - Python 3.11 or newer
-- Internet access to the public YouTube watch page
+- Internet access to the public YouTube watch pages and the Twitch Helix API
+- A Twitch developer application (only if you monitor Twitch channels — see below)
 
 The watcher has no third-party runtime dependencies. Development type checking
 uses mypy.
@@ -22,33 +23,89 @@ python3 -m venv .venv
 
 ## Run
 
-The configured livestream is the default, and it polls every five seconds:
+Pass one or more channels with repeatable `-y`/`--youtube` (handle) and
+`-t`/`--twitch` (login) flags. It polls every five seconds:
 
 ```bash
-.venv/bin/youtube-live-count-chime
+.venv/bin/youtube-live-count-chime -y @srosrosr -y @watchmepivot -t watchmepivot -t samtriestobuild
 ```
 
-The first valid count is a silent baseline. After that:
+For each channel, the first valid count is a silent baseline. After that:
 
 - an increase plays `/System/Library/Sounds/Glass.aiff`;
 - a decrease plays `/System/Library/Sounds/Basso.aiff`;
-- an unchanged or invalid observation is silent.
+- an unchanged or temporarily unavailable observation is silent.
 
 Press `Ctrl-C` to stop.
 
-## Options
+## YouTube
 
-Pass the livestream URL explicitly:
+YouTube handles need no credentials — the watcher reads the public
+`youtube.com/@<handle>/live` page. Any currently-live channel works.
+
+## Twitch
+
+Twitch viewer counts come from the public Helix `Get Streams` API, which works
+for any live channel by login. It needs a one-time Twitch application for an
+app-only access token (no per-user browser login):
+
+1. Create an application at <https://dev.twitch.tv/console/apps>.
+2. Copy its **Client ID** and generate a **Client Secret**.
+3. Put both in a git-ignored file you `source` (rather than typing the secret
+   inline, where it lands in shell history):
+
+   ```bash
+   # twitch.env (already git-ignored) — then: source twitch.env
+   export TWITCH_CLIENT_ID="your-client-id"
+   export TWITCH_CLIENT_SECRET="your-client-secret"
+   ```
+
+The watcher exchanges these for an application token via the
+`client_credentials` grant and refreshes it automatically. If a `--twitch`
+handle is requested without both variables set, it exits with a message naming
+the missing one.
+
+## Example: watch a specific set of channels
+
+Say you want to monitor these four channels:
+
+| URL | Flag |
+| --- | --- |
+| `https://www.twitch.tv/watchmepivot` | `-t watchmepivot` |
+| `https://www.twitch.tv/samtriestobuild` | `-t samtriestobuild` |
+| `https://www.youtube.com/@srosrosr` | `-y @srosrosr` |
+| `https://www.youtube.com/@watchmepivot` | `-y @watchmepivot` |
+
+The login/handle is the last path segment of the URL — the Twitch name after
+`twitch.tv/`, and the YouTube handle after `youtube.com/` (keep the `@`).
+
+Because two of these are on Twitch, set up the Twitch app once (see
+[Twitch](#twitch) above), then:
 
 ```bash
+source twitch.env   # exports TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET
+
 .venv/bin/youtube-live-count-chime \
-  'https://www.youtube.com/watch?v=zUMYDcYRsFg'
+  -t watchmepivot \
+  -t samtriestobuild \
+  -y @srosrosr \
+  -y @watchmepivot
 ```
 
-Use different audio files:
+On start it prints one line naming every channel it is watching, then runs
+until `Ctrl-C`. Each channel's first live count is a silent baseline; after
+that, a rise plays Glass and a fall plays Basso. A channel that isn't live
+never chimes — an offline Twitch channel is fully silent, while an offline
+YouTube channel logs a warning each poll (see [Limitations](#limitations)) —
+and it starts chiming automatically once it goes live. (If you only wanted the
+two YouTube channels, drop the `-t` flags and no Twitch credentials are needed
+at all.)
+
+## Options
 
 ```bash
 .venv/bin/youtube-live-count-chime \
+  -y @srosrosr -t watchmepivot \
   --up-sound /path/to/increase.aiff \
   --down-sound /path/to/decrease.aiff
 ```
@@ -57,11 +114,20 @@ Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 
 ## Limitations
 
-YouTube exposes a current total, not individual join and departure events. A join
-and departure that happen between polls can cancel each other out, and only the
-resulting displayed count is observable. YouTube may also change its page format;
-if parsing fails, the watcher warns and retains the previous valid count rather
-than producing a false chime.
+Each platform exposes a current total, not individual join and departure events.
+A join and a departure between polls can cancel out, and only the resulting
+displayed count is observable. Monitoring is limited to publicly live channels.
+
+A failed poll — an unreachable page, or an unparseable YouTube page or Helix
+response — yields no observation at all on either platform, so it never chimes
+on its own and the last count is kept. What differs is an *ended* stream: the
+Twitch source receives an explicit offline signal and clears that channel's
+baseline, while the YouTube source cannot tell an ended stream from an
+unparseable page and just keeps warning. Because a new broadcast has a different
+stream id, it re-baselines silently instead of chiming against the old count.
+One caveat of keeping the last count on any outage: if the *same* stream returns
+after a long gap, the next observation chimes once for the whole accumulated
+drift.
 
 ## Development
 
@@ -69,3 +135,7 @@ than producing a false chime.
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/mypy
 ```
+
+## License
+
+Released under the [MIT License](LICENSE).
