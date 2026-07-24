@@ -114,11 +114,12 @@ class TwitchClient:
     instead of each fetching its own.
     """
 
-    __slots__ = ("credentials", "_app_token", "_token_lock")
+    __slots__ = ("credentials", "_app_token", "_generation", "_token_lock")
 
     def __init__(self, credentials: TwitchCredentials) -> None:
         self.credentials = credentials
         self._app_token: str | None = None
+        self._generation = 0
         self._token_lock = threading.Lock()
 
     def _fetch_app_token_locked(self) -> str:
@@ -139,15 +140,23 @@ class TwitchClient:
             raise TwitchError(f"Twitch token request failed (HTTP {error.code})") from error
         token = parse_app_token(payload)
         self._app_token = token
+        self._generation += 1
         return token
 
-    def _app_token_value(self) -> str:
+    def _token(self) -> tuple[str, int]:
+        """Return the current token and its generation, fetching once if unset."""
         with self._token_lock:
             token = self._app_token
-            return token if token is not None else self._fetch_app_token_locked()
+            if token is None:
+                token = self._fetch_app_token_locked()
+            return token, self._generation
 
-    def _refresh_token(self) -> str:
+    def _refresh_token(self, seen_generation: int) -> str:
+        """Fetch a new token unless another thread already rotated it."""
         with self._token_lock:
+            if self._generation != seen_generation:
+                assert self._app_token is not None  # a bumped generation stored one
+                return self._app_token
             return self._fetch_app_token_locked()
 
     def _get_streams(self, token: str, target: StreamTarget) -> StreamSnapshot:
@@ -167,13 +176,14 @@ class TwitchClient:
 
     def stream(self, target: StreamTarget) -> StreamSnapshot:
         """Return the target's snapshot, refreshing the token once after HTTP 401."""
+        token, generation = self._token()
         try:
-            return self._get_streams(self._app_token_value(), target)
+            return self._get_streams(token, target)
         except HTTPError as error:
             if error.code != 401:
                 raise self._streams_error(error) from error
         try:
-            return self._get_streams(self._refresh_token(), target)
+            return self._get_streams(self._refresh_token(generation), target)
         except HTTPError as error:
             raise self._streams_error(error) from error
 

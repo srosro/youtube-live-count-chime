@@ -164,6 +164,16 @@ class TwitchClientTests(unittest.TestCase):
         self.assertEqual(http.token_calls, 1)
         self.assertEqual(http.streams_calls, 2)
 
+    def test_refresh_dedups_when_token_already_rotated(self) -> None:
+        http = _FakeHttp(token=[{"access_token": "t1"}, {"access_token": "t2"}])
+        client = TwitchClient(CREDS)
+        with patch("youtube_live_count_chime.twitch.urlopen", http):
+            _, generation = client._token()  # fetch t1 (generation 1)
+            first = client._refresh_token(generation)  # generation matches -> fetch t2
+            second = client._refresh_token(generation)  # stale generation -> reuse t2
+        self.assertEqual((first, second), ("t2", "t2"))
+        self.assertEqual(http.token_calls, 2)  # initial + one refresh, second reused
+
     def test_non_401_streams_error_names_status(self) -> None:
         http = _FakeHttp(token=[{"access_token": "tok"}], streams=[_http_error(500)])
         client = TwitchClient(CREDS)

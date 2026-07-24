@@ -34,30 +34,38 @@ async def monitor(
     """Watch every source concurrently, chiming once per viewer-count change.
 
     Sources swallow and retry their own fetch failures, so an exception that
-    escapes one is an unexpected bug: it propagates and stops the watcher
-    rather than being silently absorbed (``main`` reports it and exits
-    non-zero).
+    escapes one is an unexpected bug: the TaskGroup cancels the siblings and
+    propagates it (as an ``ExceptionGroup``) so ``main`` reports it and exits
+    non-zero rather than silently absorbing it.
     """
     shared_tracker = tracker if tracker is not None else CountTracker()
     chime_lock = asyncio.Lock()
 
     async def consume(source: StreamSource) -> None:
-        async for snapshot in source.snapshots():
-            change = shared_tracker.observe(snapshot)
-            if change is None:
-                continue
-            sound = config.up_sound if change.direction == "up" else config.down_sound
-            print(
-                f"{source.name}: {change.previous} -> {change.current} "
-                f"({change.direction})",
-                flush=True,
-            )
-            async with chime_lock:
-                try:
-                    await asyncio.to_thread(play, sound)
-                except SoundPlaybackError as error:
-                    _LOGGER.warning(
-                        "could not play chime for %s: %s", source.name, error
-                    )
+        try:
+            async for snapshot in source.snapshots():
+                change = shared_tracker.observe(snapshot)
+                if change is None:
+                    continue
+                sound = (
+                    config.up_sound if change.direction == "up" else config.down_sound
+                )
+                print(
+                    f"{source.name}: {change.previous} -> {change.current} "
+                    f"({change.direction})",
+                    flush=True,
+                )
+                async with chime_lock:
+                    try:
+                        await asyncio.to_thread(play, sound)
+                    except SoundPlaybackError as error:
+                        _LOGGER.warning(
+                            "could not play chime for %s: %s", source.name, error
+                        )
+        except Exception as error:
+            # Name the channel in the failure that main will report.
+            raise RuntimeError(f"source {source.name} failed") from error
 
-    await asyncio.gather(*(consume(source) for source in sources))
+    async with asyncio.TaskGroup() as group:
+        for source in sources:
+            group.create_task(consume(source))

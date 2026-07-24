@@ -58,9 +58,9 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(played, [UP])  # a 1->2 up; b unchanged; baselines silent
 
-    async def test_unexpected_source_error_propagates(self) -> None:
+    async def test_unexpected_source_error_stops_the_watcher(self) -> None:
         healthy = StreamTarget(Platform.YOUTUBE, "a")
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ExceptionGroup) as ctx:
             await monitor(
                 [
                     ExplodingSource(),
@@ -69,6 +69,8 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
             )
+        messages = [str(error) for error in ctx.exception.exceptions]
+        self.assertTrue(any("boom" in message for message in messages))  # names channel
 
 
 if __name__ == "__main__":

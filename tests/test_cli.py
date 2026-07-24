@@ -109,7 +109,8 @@ class MainTests(unittest.TestCase):
             raise RuntimeError("kaboom")
 
         with patch("youtube_live_count_chime.cli.monitor", boom):
-            self.assertEqual(main(["-y", "@mkbhd"]), 1)
+            with self.assertLogs("youtube_live_count_chime.cli", "ERROR"):
+                self.assertEqual(main(["-y", "@mkbhd"]), 1)
 
     def test_passes_sources_and_ordered_sounds_to_monitor(self) -> None:
         captured: dict[str, Any] = {}
