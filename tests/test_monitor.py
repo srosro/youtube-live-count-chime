@@ -20,6 +20,14 @@ class FakeSource:
             yield snap
 
 
+class ExplodingSource:
+    name = "boom"
+
+    async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+        raise RuntimeError("kaboom")
+        yield  # pragma: no cover - marks this an async generator
+
+
 def live(target: StreamTarget, viewers: int) -> StreamSnapshot:
     return StreamSnapshot(target, "s1", viewers)
 
@@ -49,6 +57,16 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             play=played.append,
         )
         self.assertEqual(played, [UP])  # a 1->2 up; b unchanged; baselines silent
+
+    async def test_one_failing_source_does_not_stop_the_others(self) -> None:
+        healthy = StreamTarget(Platform.YOUTUBE, "a")
+        played: list[Path] = []
+        await monitor(
+            [ExplodingSource(), FakeSource("youtube:a", [live(healthy, 1), live(healthy, 4)])],
+            ChimeConfig(UP, DOWN),
+            play=played.append,
+        )
+        self.assertEqual(played, [UP])  # exploding source is isolated; healthy one chimes
 
 
 if __name__ == "__main__":

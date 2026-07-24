@@ -36,21 +36,29 @@ async def monitor(
     chime_lock = asyncio.Lock()
 
     async def consume(source: StreamSource) -> None:
-        async for snapshot in source.snapshots():
-            change = shared_tracker.observe(snapshot)
-            if change is None:
-                continue
-            sound = config.up_sound if change.direction == "up" else config.down_sound
-            print(
-                f"{source.name}: {change.previous} -> {change.current} "
-                f"({change.direction})",
-                flush=True,
-            )
-            async with chime_lock:
-                try:
-                    await asyncio.to_thread(play, sound)
-                except SoundPlaybackError as error:
-                    _LOGGER.warning("could not play chime for %s: %s", source.name, error)
+        try:
+            async for snapshot in source.snapshots():
+                change = shared_tracker.observe(snapshot)
+                if change is None:
+                    continue
+                sound = (
+                    config.up_sound if change.direction == "up" else config.down_sound
+                )
+                print(
+                    f"{source.name}: {change.previous} -> {change.current} "
+                    f"({change.direction})",
+                    flush=True,
+                )
+                async with chime_lock:
+                    try:
+                        await asyncio.to_thread(play, sound)
+                    except SoundPlaybackError as error:
+                        _LOGGER.warning(
+                            "could not play chime for %s: %s", source.name, error
+                        )
+        except Exception:
+            # Isolate one channel's failure so the others keep watching.
+            _LOGGER.exception("stopped watching %s after an unexpected error", source.name)
 
     async with asyncio.TaskGroup() as group:
         for source in sources:
