@@ -65,6 +65,42 @@ The watcher exchanges these for an application token via the
 handle is requested without both variables set, it exits with a message naming
 the missing one.
 
+## Example: watch a specific set of channels
+
+Say you want to monitor these four channels:
+
+| URL | Flag |
+| --- | --- |
+| `https://www.twitch.tv/watchmepivot` | `-t watchmepivot` |
+| `https://www.twitch.tv/samtriestobuild` | `-t samtriestobuild` |
+| `https://www.youtube.com/@srosrosr` | `-y @srosrosr` |
+| `https://www.youtube.com/@watchmepivot` | `-y @watchmepivot` |
+
+The login/handle is the last path segment of the URL — the Twitch name after
+`twitch.tv/`, and the YouTube handle after `youtube.com/` (keep the `@`).
+
+Because two of these are on Twitch, set up the Twitch app once (see
+[Twitch](#twitch) above), then:
+
+```bash
+source twitch.env   # exports TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET
+
+.venv/bin/youtube-live-count-chime \
+  -t watchmepivot \
+  -t samtriestobuild \
+  -y @srosrosr \
+  -y @watchmepivot
+```
+
+On start it prints one line naming every channel it is watching, then runs
+until `Ctrl-C`. Each channel's first live count is a silent baseline; after
+that, a rise plays Glass and a fall plays Basso. A channel that isn't live
+never chimes — an offline Twitch channel is fully silent, while an offline
+YouTube channel logs a warning each poll (see [Limitations](#limitations)) —
+and it starts chiming automatically once it goes live. (If you only wanted the
+two YouTube channels, drop the `-t` flags and no Twitch credentials are needed
+at all.)
+
 ## Options
 
 ```bash
