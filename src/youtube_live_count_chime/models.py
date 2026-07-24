@@ -35,7 +35,6 @@ class StreamSnapshot:
     target: StreamTarget
     stream_id: str | None
     viewers: int | None
-    followers: int | None = None
     url: str | None = None
 
     def __post_init__(self) -> None:
@@ -43,8 +42,6 @@ class StreamSnapshot:
             raise ValueError("live snapshots require both stream_id and viewers")
         if self.viewers is not None and self.viewers < 0:
             raise ValueError("viewers cannot be negative")
-        if self.followers is not None and self.followers < 0:
-            raise ValueError("followers cannot be negative")
 
     @classmethod
     def offline(cls, target: StreamTarget, *, url: str | None = None) -> Self:
