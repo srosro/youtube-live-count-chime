@@ -136,3 +136,7 @@ drift.
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/mypy
 ```
+
+## License
+
+Released under the [MIT License](LICENSE).
