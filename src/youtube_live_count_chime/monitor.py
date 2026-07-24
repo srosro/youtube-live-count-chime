@@ -52,4 +52,6 @@ async def monitor(
                 except SoundPlaybackError as error:
                     _LOGGER.warning("could not play chime for %s: %s", source.name, error)
 
-    await asyncio.gather(*(consume(source) for source in sources))
+    async with asyncio.TaskGroup() as group:
+        for source in sources:
+            group.create_task(consume(source))
