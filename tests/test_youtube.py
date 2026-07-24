@@ -152,10 +152,11 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(YouTubeSource.for_handle("@MKBHD").name, "youtube:mkbhd")
         self.assertEqual(YouTubeSource.for_handle("  ltt ").name, "youtube:ltt")
 
-    def test_for_handle_rejects_unusable_handles(self) -> None:
-        for bad in ("@", "   ", "a b", "mkbhd/videos", "@@mkbhd", "mkbhd?x=1"):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                YouTubeSource.for_handle(bad)
+    def test_for_handle_rejects_unusable_handle(self) -> None:
+        # Full accept/reject matrix lives in test_models.NormalizeHandleTests;
+        # here we only confirm for_handle delegates to it.
+        with self.assertRaises(ValueError):
+            YouTubeSource.for_handle("mkbhd/videos")
 
     async def test_snapshots_warns_and_retries_after_a_fetch_error(self) -> None:
         page = YouTubeLivePage("vid", "https://www.youtube.com/watch?v=vid", 7)

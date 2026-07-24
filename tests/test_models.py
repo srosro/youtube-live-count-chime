@@ -6,7 +6,21 @@ from youtube_live_count_chime.models import (
     StreamSnapshot,
     StreamTarget,
     ViewerChange,
+    normalize_handle,
 )
+
+
+class NormalizeHandleTests(unittest.TestCase):
+    def test_strips_prefix_whitespace_and_case(self) -> None:
+        cases = {"@MKBHD": "mkbhd", "  ltt ": "ltt", "Shr_oud": "shr_oud"}
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(normalize_handle(value), expected)
+
+    def test_rejects_empty_or_url_unsafe_handles(self) -> None:
+        for bad in ("", "@", "   ", "a b", "mkbhd/videos", "@@mkbhd", "x?y", "a" * 40):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                normalize_handle(bad)
 
 
 class StreamSnapshotTests(unittest.TestCase):
