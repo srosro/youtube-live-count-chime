@@ -15,7 +15,8 @@ class NormalizeHandleTests(unittest.TestCase):
         cases = {
             "@MKBHD": "mkbhd",
             "  ltt ": "ltt",
-            "@ mkbhd ": "mkbhd",  # inner strip after dropping @
+            "  @mkbhd": "mkbhd",  # outer strip, before dropping @
+            "@ mkbhd ": "mkbhd",  # inner strip, after dropping @
             "Shr_oud": "shr_oud",
             "mk.bhd-1": "mk.bhd-1",  # ., -, digits are all allowed
         }

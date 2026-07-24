@@ -28,9 +28,10 @@ def normalize_handle(value: str) -> str:
 
     Strips surrounding whitespace and a leading ``@`` and lowercases, so
     ``@MKBHD`` and ``mkbhd`` resolve to one target. Raises ``ValueError`` for
-    an empty handle or one carrying URL-significant characters (``/``, ``?``,
-    spaces, a second ``@``), which would otherwise be interpolated straight
-    into a fetch URL and fail every poll.
+    an empty handle, one longer than 30 characters, or one carrying
+    URL-significant characters (``/``, ``?``, spaces, a second ``@``), which
+    would otherwise be interpolated straight into a fetch URL and fail every
+    poll.
     """
     normalized = value.strip().removeprefix("@").strip().lower()
     if not _HANDLE_PATTERN.fullmatch(normalized):

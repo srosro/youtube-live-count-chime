@@ -69,10 +69,12 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
             )
-        # The wrapper names the channel ("channel-x"), distinct from the raw
-        # error text ("upstream failure"), so this fails if the wrapper is gone.
+        # Pin the full wrapper message and the preserved cause: this fails if
+        # the naming wrapper or its `from error` chaining is dropped.
         messages = [str(error) for error in ctx.exception.exceptions]
-        self.assertTrue(any("channel-x" in message for message in messages))
+        self.assertIn("source channel-x failed", messages)
+        causes = [type(error.__cause__) for error in ctx.exception.exceptions]
+        self.assertIn(RuntimeError, causes)
 
 
 if __name__ == "__main__":
