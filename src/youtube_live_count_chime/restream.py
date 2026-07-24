@@ -227,17 +227,17 @@ def parse_channel(payload: object) -> RestreamChannel:
         or platform_id is None
         or platform_id < 0
         or not isinstance(identifier, str)
-        or not identifier
         or not isinstance(display_name, str)
         or not display_name
         or not isinstance(url, str)
-        or not url
     ):
         raise RestreamError("invalid Restream channel response")
 
-    twitch_handle = _twitch_handle(url) if platform_id == TWITCH_PLATFORM_ID else None
-    if platform_id == TWITCH_PLATFORM_ID and twitch_handle is None:
-        raise RestreamError("invalid Restream Twitch channel URL")
+    twitch_handle: str | None = None
+    if platform_id == TWITCH_PLATFORM_ID:
+        twitch_handle = _twitch_handle(url)
+        if not identifier or twitch_handle is None:
+            raise RestreamError("invalid Restream Twitch channel")
     return RestreamChannel(
         channel_id,
         platform_id,
@@ -271,20 +271,24 @@ def parse_status_message(
         return None
 
     online = value.get("online")
-    viewers = _strict_int(value.get("viewers"))
-    followers = _strict_int(value.get("followers"))
-    if (
-        not isinstance(online, bool)
-        or viewers is None
-        or viewers < 0
-        or followers is None
-        or followers < 0
-    ):
+    if not isinstance(online, bool):
+        return None
+
+    raw_viewers = value.get("viewers")
+    viewers = None if raw_viewers is None else _strict_int(raw_viewers)
+    if raw_viewers is not None and (viewers is None or viewers < 0):
+        return None
+
+    raw_followers = value.get("followers")
+    followers = None if raw_followers is None else _strict_int(raw_followers)
+    if raw_followers is not None and (followers is None or followers < 0):
         return None
 
     url = f"https://www.twitch.tv/{quote(target.name, safe='')}"
     if not online:
         return StreamSnapshot.offline(target, url=url)
+    if viewers is None:
+        return None
 
     event_id = value.get("eventId")
     event_identifier = value.get("eventIdentifier")
@@ -417,10 +421,14 @@ class RestreamSource:
     async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield mapped statuses, refreshing credentials and reconnecting."""
         refreshed_after_unauthorized = False
-        refresh_at = monotonic() + self.refresh_interval
+        access_token: str | None = None
+        refresh_at = 0.0
         while True:
             try:
-                access_token = await asyncio.to_thread(self.client.access_token)
+                if access_token is None:
+                    pair = await asyncio.to_thread(self.client.refresh)
+                    access_token = pair.access_token
+                    refresh_at = monotonic() + self.refresh_interval
                 url = (
                     f"{WEBSOCKET_URL}?accessToken="
                     f"{quote(access_token, safe='')}"
@@ -430,14 +438,16 @@ class RestreamSource:
                     while True:
                         remaining = refresh_at - monotonic()
                         if remaining <= 0:
-                            await asyncio.to_thread(self.client.refresh)
+                            pair = await asyncio.to_thread(self.client.refresh)
+                            access_token = pair.access_token
                             refresh_at = monotonic() + self.refresh_interval
                             break
                         try:
                             async with asyncio.timeout(remaining):
                                 message = await websocket.recv()
                         except TimeoutError:
-                            await asyncio.to_thread(self.client.refresh)
+                            pair = await asyncio.to_thread(self.client.refresh)
+                            access_token = pair.access_token
                             refresh_at = monotonic() + self.refresh_interval
                             break
                         snapshot = parse_status_message(
@@ -454,7 +464,7 @@ class RestreamSource:
                     and not refreshed_after_unauthorized
                 ):
                     try:
-                        await asyncio.to_thread(self.client.refresh)
+                        pair = await asyncio.to_thread(self.client.refresh)
                     except Exception as refresh_error:
                         _LOGGER.warning(
                             "Restream token refresh failed (%s)",
@@ -462,6 +472,7 @@ class RestreamSource:
                         )
                         await asyncio.sleep(self.retry_interval)
                     else:
+                        access_token = pair.access_token
                         refreshed_after_unauthorized = True
                         refresh_at = monotonic() + self.refresh_interval
                     continue

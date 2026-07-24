@@ -7,7 +7,7 @@ import logging
 import subprocess
 import traceback
 import unittest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
 
@@ -133,6 +133,42 @@ class ParseStatusMessageTests(unittest.TestCase):
     def test_parses_offline_twitch_status(self) -> None:
         snapshot = parse_status_message(
             {**STATUS_PAYLOAD, "online": False},
+            self.targets,
+        )
+
+        self.assertEqual(
+            snapshot,
+            StreamSnapshot.offline(
+                self.target,
+                url="https://www.twitch.tv/samtriestobuild",
+            ),
+        )
+
+    def test_live_status_allows_missing_follower_count(self) -> None:
+        snapshot = parse_status_message(
+            {**STATUS_PAYLOAD, "followers": None},
+            self.targets,
+        )
+
+        self.assertEqual(
+            snapshot,
+            StreamSnapshot(
+                target=self.target,
+                stream_id="restream-event-a",
+                viewers=4,
+                followers=None,
+                url="https://www.twitch.tv/samtriestobuild",
+            ),
+        )
+
+    def test_offline_status_allows_missing_counts(self) -> None:
+        snapshot = parse_status_message(
+            {
+                **STATUS_PAYLOAD,
+                "online": False,
+                "viewers": None,
+                "followers": None,
+            },
             self.targets,
         )
 
@@ -303,6 +339,30 @@ class RestreamClientTests(unittest.TestCase):
             "Bearer new-access",
         )
 
+    def test_list_channels_keeps_twitch_after_empty_non_twitch_channel(self) -> None:
+        non_twitch_channel = {
+            "id": 12345678,
+            "streamingPlatformId": 29,
+            "identifier": "",
+            "displayName": "Plow Main Channel",
+            "url": "",
+        }
+        store = MagicMock(spec=KeychainStore)
+        store.get.return_value = "access"
+        response = BytesIO(
+            json.dumps([non_twitch_channel, CHANNEL_PAYLOAD]).encode()
+        )
+
+        with patch(
+            "youtube_live_count_chime.restream.urlopen",
+            return_value=response,
+        ):
+            channels = RestreamClient(store).list_channels()
+
+        self.assertEqual(len(channels), 2)
+        self.assertIsNone(channels[0].twitch_handle)
+        self.assertEqual(channels[1].twitch_handle, "samtriestobuild")
+
     def test_http_errors_never_include_token_values(self) -> None:
         secret = "do-not-echo-this-access-token"
         store = MagicMock(spec=KeychainStore)
@@ -329,7 +389,6 @@ class _FakeWebSocket:
         self._messages = iter(messages)
 
     async def recv(self) -> str:
-        await asyncio.sleep(0)
         message = next(self._messages)
         if isinstance(message, Exception):
             raise message
@@ -343,14 +402,18 @@ class _FakeConnection:
         *,
         clock: list[float] | None = None,
         enter_time: float | None = None,
+        enter_error: Exception | None = None,
     ) -> None:
         self.websocket = websocket
         self.clock = clock
         self.enter_time = enter_time
+        self.enter_error = enter_error
 
     async def __aenter__(self) -> _FakeWebSocket:
         if self.clock is not None and self.enter_time is not None:
             self.clock[0] = self.enter_time
+        if self.enter_error is not None:
+            raise self.enter_error
         return self.websocket
 
     async def __aexit__(
@@ -362,10 +425,31 @@ class _FakeConnection:
         return None
 
 
+class _StatusResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+
+class _HTTPStatusError(ConnectionError):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.response = _StatusResponse(status_code)
+
+
 class RestreamSourceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_connects_with_encoded_token_and_emits_mapped_status(self) -> None:
+    @staticmethod
+    def _token_pair(access_token: str) -> TokenPair:
+        return TokenPair(
+            access_token,
+            "refresh",
+            3600,
+            frozenset({"channels.default.read", "stream.default.read"}),
+        )
+
+    async def test_refreshes_before_first_connection_and_uses_new_token(self) -> None:
         client = MagicMock(spec=RestreamClient)
-        client.access_token.return_value = "token with?/reserved"
+        client.access_token.return_value = "aged-access"
+        client.refresh.return_value = self._token_pair("token with?/reserved")
         target = StreamTarget(Platform.TWITCH, "samtriestobuild")
         websocket = _FakeWebSocket([json.dumps(STATUS_PAYLOAD)])
 
@@ -376,6 +460,8 @@ class RestreamSourceTests(unittest.IsolatedAsyncioTestCase):
             source = RestreamSource(client, {16972669: target})
             snapshot = await anext(source.snapshots())
 
+        client.refresh.assert_called_once_with()
+        client.access_token.assert_not_called()
         self.assertEqual(
             connector.call_args.args[0],
             "wss://streaming.api.restream.io/ws?"
@@ -392,7 +478,11 @@ class RestreamSourceTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         client = MagicMock(spec=RestreamClient)
-        client.access_token.return_value = "access"
+        client.access_token.return_value = "initial-access"
+        client.refresh.side_effect = [
+            self._token_pair("initial-access"),
+            self._token_pair("periodic-access"),
+        ]
         target = StreamTarget(Platform.TWITCH, "samtriestobuild")
         clock = [0.0]
         connections = [
@@ -431,7 +521,91 @@ class RestreamSourceTests(unittest.IsolatedAsyncioTestCase):
             )
             snapshot = await anext(source.snapshots())
 
-        client.refresh.assert_called_once_with()
+        self.assertEqual(client.refresh.call_count, 2)
+        self.assertEqual(snapshot.viewers, 4)
+
+    async def test_websocket_401_refreshes_only_once_until_connected(self) -> None:
+        client = MagicMock(spec=RestreamClient)
+        client.access_token.return_value = "initial-access"
+        client.refresh.side_effect = [
+            self._token_pair("initial-access"),
+            self._token_pair("refreshed-access"),
+        ]
+        target = StreamTarget(Platform.TWITCH, "samtriestobuild")
+        unauthorized = _HTTPStatusError("credential-bearing-url", 401)
+        connections = [
+            _FakeConnection(_FakeWebSocket([]), enter_error=unauthorized),
+            _FakeConnection(_FakeWebSocket([]), enter_error=unauthorized),
+            _FakeConnection(_FakeWebSocket([json.dumps(STATUS_PAYLOAD)])),
+        ]
+
+        with (
+            patch(
+                "youtube_live_count_chime.restream.connect",
+                side_effect=connections,
+            ) as connector,
+            patch(
+                "youtube_live_count_chime.restream.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as sleep,
+            patch("youtube_live_count_chime.restream._LOGGER.warning") as warning,
+        ):
+            source = RestreamSource(client, {16972669: target})
+            snapshot = await anext(source.snapshots())
+
+        self.assertEqual(client.refresh.call_count, 2)
+        self.assertIn("accessToken=initial-access", connector.call_args_list[0].args[0])
+        self.assertIn(
+            "accessToken=refreshed-access",
+            connector.call_args_list[1].args[0],
+        )
+        self.assertIn(
+            "accessToken=refreshed-access",
+            connector.call_args_list[2].args[0],
+        )
+        sleep.assert_awaited_once_with(5.0)
+        warning.assert_called_once_with(
+            "Restream WebSocket disconnected (%s)",
+            "_HTTPStatusError",
+        )
+        self.assertNotIn("credential-bearing-url", str(warning.call_args))
+        self.assertEqual(snapshot.viewers, 4)
+
+    async def test_transient_disconnect_logs_only_class_and_backs_off(self) -> None:
+        secret = "do-not-log-token-value"
+        client = MagicMock(spec=RestreamClient)
+        client.access_token.return_value = secret
+        client.refresh.return_value = self._token_pair(secret)
+        target = StreamTarget(Platform.TWITCH, "samtriestobuild")
+        connections = [
+            _FakeConnection(
+                _FakeWebSocket(
+                    [ConnectionError(f"failed URL accessToken={secret}")]
+                )
+            ),
+            _FakeConnection(_FakeWebSocket([json.dumps(STATUS_PAYLOAD)])),
+        ]
+
+        with (
+            patch(
+                "youtube_live_count_chime.restream.connect",
+                side_effect=connections,
+            ),
+            patch(
+                "youtube_live_count_chime.restream.asyncio.sleep",
+                new_callable=AsyncMock,
+            ) as sleep,
+            patch("youtube_live_count_chime.restream._LOGGER.warning") as warning,
+        ):
+            source = RestreamSource(client, {16972669: target})
+            snapshot = await anext(source.snapshots())
+
+        sleep.assert_awaited_once_with(5.0)
+        warning.assert_called_once_with(
+            "Restream WebSocket disconnected (%s)",
+            "ConnectionError",
+        )
+        self.assertNotIn(secret, str(warning.call_args))
         self.assertEqual(snapshot.viewers, 4)
 
 
