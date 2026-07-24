@@ -11,8 +11,8 @@ from typing import Final, Literal, Protocol, Self
 
 # YouTube handles allow letters, digits, ., _, - ; Twitch logins are a subset.
 # Both platforms resolve handles case-insensitively, so a lowercased handle is
-# safe to interpolate straight into the fetch URL. The length bound rejects a
-# pasted URL or junk that would otherwise 404 every poll.
+# safe to interpolate straight into the fetch URL. The 30-char bound (YouTube's
+# max; Twitch's is 25) rejects long charset-valid junk that would 404 every poll.
 _HANDLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9._-]{1,30}")
 
 
