@@ -31,35 +31,33 @@ async def monitor(
     tracker: CountTracker | None = None,
     play: Callable[[Path], None] = play_sound,
 ) -> None:
-    """Watch every source concurrently, chiming once per viewer-count change."""
+    """Watch every source concurrently, chiming once per viewer-count change.
+
+    Sources swallow and retry their own fetch failures, so an exception that
+    escapes one is an unexpected bug: it propagates and stops the watcher
+    rather than being silently absorbed (``main`` reports it and exits
+    non-zero).
+    """
     shared_tracker = tracker if tracker is not None else CountTracker()
     chime_lock = asyncio.Lock()
 
     async def consume(source: StreamSource) -> None:
-        try:
-            async for snapshot in source.snapshots():
-                change = shared_tracker.observe(snapshot)
-                if change is None:
-                    continue
-                sound = (
-                    config.up_sound if change.direction == "up" else config.down_sound
-                )
-                print(
-                    f"{source.name}: {change.previous} -> {change.current} "
-                    f"({change.direction})",
-                    flush=True,
-                )
-                async with chime_lock:
-                    try:
-                        await asyncio.to_thread(play, sound)
-                    except SoundPlaybackError as error:
-                        _LOGGER.warning(
-                            "could not play chime for %s: %s", source.name, error
-                        )
-        except Exception:
-            # Isolate one channel's failure so the others keep watching.
-            _LOGGER.exception("stopped watching %s after an unexpected error", source.name)
+        async for snapshot in source.snapshots():
+            change = shared_tracker.observe(snapshot)
+            if change is None:
+                continue
+            sound = config.up_sound if change.direction == "up" else config.down_sound
+            print(
+                f"{source.name}: {change.previous} -> {change.current} "
+                f"({change.direction})",
+                flush=True,
+            )
+            async with chime_lock:
+                try:
+                    await asyncio.to_thread(play, sound)
+                except SoundPlaybackError as error:
+                    _LOGGER.warning(
+                        "could not play chime for %s: %s", source.name, error
+                    )
 
-    async with asyncio.TaskGroup() as group:
-        for source in sources:
-            group.create_task(consume(source))
+    await asyncio.gather(*(consume(source) for source in sources))

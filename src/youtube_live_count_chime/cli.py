@@ -25,6 +25,7 @@ from youtube_live_count_chime.youtube import YouTubeSource
 DEFAULT_UP_SOUND: Final = "/System/Library/Sounds/Glass.aiff"
 DEFAULT_DOWN_SOUND: Final = "/System/Library/Sounds/Basso.aiff"
 DEFAULT_POLL_INTERVAL: Final = 5.0
+_LOGGER: Final = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,4 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         asyncio.run(monitor(sources, chime))
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
+    except Exception as error:
+        _LOGGER.exception("stopped watching after an unexpected error: %s", error)
+        return 1
     return 0

@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from email.message import Message
 import json
 import os
+import threading
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -50,16 +51,17 @@ class _FakeHttp:
         self.token_calls = 0
         self.streams_calls = 0
         self.streams_auth: list[str | None] = []
+        self._lock = threading.Lock()
 
     def __call__(self, request: Request, timeout: float | None = None) -> _FakeResponse:
-        url = request.full_url
-        if "oauth2/token" in url:
-            self.token_calls += 1
-            result = self.token.pop(0)
-        else:
-            self.streams_calls += 1
-            self.streams_auth.append(request.get_header("Authorization"))
-            result = self.streams.pop(0)
+        with self._lock:
+            if "oauth2/token" in request.full_url:
+                self.token_calls += 1
+                result = self.token.pop(0)
+            else:
+                self.streams_calls += 1
+                self.streams_auth.append(request.get_header("Authorization"))
+                result = self.streams.pop(0)
         if isinstance(result, HTTPError):
             raise result
         return _FakeResponse(result)
@@ -144,6 +146,22 @@ class TwitchClientTests(unittest.TestCase):
         self.assertEqual(snapshot.viewers, 5)
         self.assertEqual((http.token_calls, http.streams_calls), (2, 2))
         self.assertEqual(http.streams_auth, ["Bearer old", "Bearer new"])
+
+    def test_concurrent_first_polls_fetch_one_shared_token(self) -> None:
+        # One queued token but two concurrent pollers: without the lock the
+        # second poll pops an empty token queue, so token_calls != 1.
+        http = _FakeHttp(token=[{"access_token": "tok"}], streams=[LIVE, LIVE])
+        client = TwitchClient(CREDS)
+        with patch("youtube_live_count_chime.twitch.urlopen", http):
+            threads = [
+                threading.Thread(target=client.stream, args=(TARGET,)) for _ in range(2)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(http.token_calls, 1)
+        self.assertEqual(http.streams_calls, 2)
 
     def test_non_401_streams_error_names_status(self) -> None:
         http = _FakeHttp(token=[{"access_token": "tok"}], streams=[_http_error(500)])

@@ -104,6 +104,13 @@ class MainTests(unittest.TestCase):
         with patch("youtube_live_count_chime.cli.monitor", fake_monitor):
             self.assertEqual(main(["-y", "@mkbhd"]), 0)
 
+    def test_unexpected_error_exits_1(self) -> None:
+        async def boom(sources: Sequence[StreamSource], config: ChimeConfig) -> None:
+            raise RuntimeError("kaboom")
+
+        with patch("youtube_live_count_chime.cli.monitor", boom):
+            self.assertEqual(main(["-y", "@mkbhd"]), 1)
+
     def test_passes_sources_and_ordered_sounds_to_monitor(self) -> None:
         captured: dict[str, Any] = {}
 

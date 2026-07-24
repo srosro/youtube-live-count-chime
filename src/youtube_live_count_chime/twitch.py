@@ -146,12 +146,8 @@ class TwitchClient:
             token = self._app_token
             return token if token is not None else self._fetch_app_token_locked()
 
-    def _refresh_token(self, used: str) -> str:
+    def _refresh_token(self) -> str:
         with self._token_lock:
-            # Skip the fetch if another thread already rotated the token.
-            if self._app_token != used:
-                assert self._app_token is not None
-                return self._app_token
             return self._fetch_app_token_locked()
 
     def _get_streams(self, token: str, target: StreamTarget) -> StreamSnapshot:
@@ -171,14 +167,13 @@ class TwitchClient:
 
     def stream(self, target: StreamTarget) -> StreamSnapshot:
         """Return the target's snapshot, refreshing the token once after HTTP 401."""
-        token = self._app_token_value()
         try:
-            return self._get_streams(token, target)
+            return self._get_streams(self._app_token_value(), target)
         except HTTPError as error:
             if error.code != 401:
                 raise self._streams_error(error) from error
         try:
-            return self._get_streams(self._refresh_token(token), target)
+            return self._get_streams(self._refresh_token(), target)
         except HTTPError as error:
             raise self._streams_error(error) from error
 

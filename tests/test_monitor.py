@@ -58,15 +58,17 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(played, [UP])  # a 1->2 up; b unchanged; baselines silent
 
-    async def test_one_failing_source_does_not_stop_the_others(self) -> None:
+    async def test_unexpected_source_error_propagates(self) -> None:
         healthy = StreamTarget(Platform.YOUTUBE, "a")
-        played: list[Path] = []
-        await monitor(
-            [ExplodingSource(), FakeSource("youtube:a", [live(healthy, 1), live(healthy, 4)])],
-            ChimeConfig(UP, DOWN),
-            play=played.append,
-        )
-        self.assertEqual(played, [UP])  # exploding source is isolated; healthy one chimes
+        with self.assertRaises(RuntimeError):
+            await monitor(
+                [
+                    ExplodingSource(),
+                    FakeSource("youtube:a", [live(healthy, 1), live(healthy, 4)]),
+                ],
+                ChimeConfig(UP, DOWN),
+                play=lambda path: None,
+            )
 
 
 if __name__ == "__main__":
