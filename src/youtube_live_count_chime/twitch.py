@@ -120,16 +120,20 @@ class TwitchClient:
             ).encode("ascii"),
             method="POST",
         )
-        token = parse_app_token(_get_json(request))
+        try:
+            payload = _get_json(request)
+        except HTTPError as error:
+            raise TwitchError(f"Twitch token request failed (HTTP {error.code})") from error
+        token = parse_app_token(payload)
         self._app_token = token
         return token
 
     def _app_token_value(self) -> str:
         return self._app_token if self._app_token is not None else self._fetch_app_token()
 
-    def _get_streams(self, login: str, token: str, target: StreamTarget) -> StreamSnapshot:
+    def _get_streams(self, token: str, target: StreamTarget) -> StreamSnapshot:
         request = Request(
-            f"{STREAMS_URL}?{urlencode({'user_login': login})}",
+            f"{STREAMS_URL}?{urlencode({'user_login': target.name})}",
             headers={
                 "Client-Id": self.credentials.client_id,
                 "Authorization": f"Bearer {token}",
@@ -138,21 +142,21 @@ class TwitchClient:
         )
         return parse_stream(_get_json(request), target)
 
+    @staticmethod
+    def _streams_error(error: HTTPError) -> TwitchError:
+        return TwitchError(f"Twitch streams request failed (HTTP {error.code})")
+
     def stream(self, target: StreamTarget) -> StreamSnapshot:
         """Return the target's snapshot, refreshing the token once after HTTP 401."""
         try:
-            return self._get_streams(target.name, self._app_token_value(), target)
+            return self._get_streams(self._app_token_value(), target)
         except HTTPError as error:
             if error.code != 401:
-                raise TwitchError(
-                    f"Twitch streams request failed ({type(error).__name__})"
-                ) from None
+                raise self._streams_error(error) from error
         try:
-            return self._get_streams(target.name, self._fetch_app_token(), target)
+            return self._get_streams(self._fetch_app_token(), target)
         except HTTPError as error:
-            raise TwitchError(
-                f"Twitch streams request failed ({type(error).__name__})"
-            ) from None
+            raise self._streams_error(error) from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,17 +172,17 @@ class TwitchSource:
     def for_login(
         cls,
         login: str,
-        credentials: TwitchCredentials,
+        client: TwitchClient,
         *,
         poll_interval: float = 5.0,
     ) -> Self:
-        """Create a source that polls one Twitch login's live viewer count."""
+        """Create a source that polls one Twitch login, sharing one app token."""
         normalized = login.removeprefix("@").lower()
         target = StreamTarget(Platform.TWITCH, normalized)
         return cls(
             name=target.key,
             target=target,
-            client=TwitchClient(credentials),
+            client=client,
             poll_interval=poll_interval,
         )
 

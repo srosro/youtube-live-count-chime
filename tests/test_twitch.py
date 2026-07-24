@@ -1,10 +1,13 @@
 from collections.abc import Iterator
+import json
 import os
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.twitch import (
+    TwitchClient,
     TwitchCredentials,
     TwitchError,
     TwitchSource,
@@ -14,6 +17,55 @@ from youtube_live_count_chime.twitch import (
 
 
 TARGET = StreamTarget(Platform.TWITCH, "shroud")
+CREDS = TwitchCredentials("id", "secret")
+
+
+class _FakeResponse:
+    def __init__(self, payload: object) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._body
+
+
+class _FakeHttp:
+    """Serve queued token/streams responses and record which endpoints were hit."""
+
+    def __init__(
+        self,
+        *,
+        token: list[object] | None = None,
+        streams: list[object] | None = None,
+    ) -> None:
+        self.token = list(token or [])
+        self.streams = list(streams or [])
+        self.token_calls = 0
+        self.streams_calls = 0
+
+    def __call__(self, request: object, timeout: float | None = None) -> _FakeResponse:
+        url = getattr(request, "full_url", "")
+        if "oauth2/token" in url:
+            self.token_calls += 1
+            result = self.token.pop(0)
+        else:
+            self.streams_calls += 1
+            result = self.streams.pop(0)
+        if isinstance(result, HTTPError):
+            raise result
+        return _FakeResponse(result)
+
+
+def _http_error(code: int) -> HTTPError:
+    return HTTPError("https://twitch.test", code, "error", None, None)  # type: ignore[arg-type]
+
+
+LIVE = {"data": [{"id": "1", "user_login": "shroud", "viewer_count": 5}]}
 
 
 class CredentialsTests(unittest.TestCase):
@@ -68,10 +120,48 @@ class ParseStreamTests(unittest.TestCase):
                 parse_stream({"data": data}, TARGET)
 
 
+class TwitchClientTests(unittest.TestCase):
+    def test_reuses_cached_token_across_calls(self) -> None:
+        http = _FakeHttp(token=[{"access_token": "tok"}], streams=[LIVE, LIVE])
+        client = TwitchClient(CREDS)
+        with patch("youtube_live_count_chime.twitch.urlopen", http):
+            client.stream(TARGET)
+            client.stream(TARGET)
+        self.assertEqual((http.token_calls, http.streams_calls), (1, 2))
+
+    def test_refreshes_token_once_after_401(self) -> None:
+        http = _FakeHttp(
+            token=[{"access_token": "old"}, {"access_token": "new"}],
+            streams=[_http_error(401), LIVE],
+        )
+        client = TwitchClient(CREDS)
+        with patch("youtube_live_count_chime.twitch.urlopen", http):
+            snapshot = client.stream(TARGET)
+        self.assertEqual(snapshot.viewers, 5)
+        self.assertEqual((http.token_calls, http.streams_calls), (2, 2))
+
+    def test_non_401_streams_error_names_status(self) -> None:
+        http = _FakeHttp(token=[{"access_token": "tok"}], streams=[_http_error(500)])
+        client = TwitchClient(CREDS)
+        with patch("youtube_live_count_chime.twitch.urlopen", http):
+            with self.assertRaises(TwitchError) as ctx:
+                client.stream(TARGET)
+        self.assertIn("500", str(ctx.exception))
+        self.assertIn("streams", str(ctx.exception))
+
+    def test_token_endpoint_error_names_token_not_streams(self) -> None:
+        http = _FakeHttp(token=[_http_error(403)], streams=[])
+        client = TwitchClient(CREDS)
+        with patch("youtube_live_count_chime.twitch.urlopen", http):
+            with self.assertRaises(TwitchError) as ctx:
+                client.stream(TARGET)
+        self.assertIn("token", str(ctx.exception))
+        self.assertIn("403", str(ctx.exception))
+
+
 class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_yields_live_then_offline_snapshots(self) -> None:
-        creds = TwitchCredentials("id", "secret")
-        source = TwitchSource.for_login("Shroud", creds, poll_interval=0.0)
+        source = TwitchSource.for_login("Shroud", TwitchClient(CREDS), poll_interval=0.0)
         payloads: Iterator[object] = iter(
             (
                 {"data": [{"id": "1", "user_login": "shroud", "viewer_count": 10}]},
