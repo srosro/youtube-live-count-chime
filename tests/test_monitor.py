@@ -21,10 +21,10 @@ class FakeSource:
 
 
 class ExplodingSource:
-    name = "boom"
+    name = "channel-x"
 
     async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
-        raise RuntimeError("kaboom")
+        raise RuntimeError("upstream failure")
         yield  # pragma: no cover - marks this an async generator
 
 
@@ -69,8 +69,10 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
             )
+        # The wrapper names the channel ("channel-x"), distinct from the raw
+        # error text ("upstream failure"), so this fails if the wrapper is gone.
         messages = [str(error) for error in ctx.exception.exceptions]
-        self.assertTrue(any("boom" in message for message in messages))  # names channel
+        self.assertTrue(any("channel-x" in message for message in messages))
 
 
 if __name__ == "__main__":
