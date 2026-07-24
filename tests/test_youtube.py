@@ -14,15 +14,11 @@ FIXTURE = Path(__file__).parent / "fixtures" / "live_page.html"
 
 
 class ParseViewerCountTests(unittest.TestCase):
-    def test_extracts_original_live_viewer_count(self) -> None:
-        page_html = FIXTURE.read_text(encoding="utf-8")
-
-        self.assertEqual(parse_viewer_count(page_html), 1)
-
-    def test_extracts_synthetic_live_counts(self) -> None:
+    def test_extracts_live_counts(self) -> None:
         key = '"videoViewCountRenderer":'
         live = '{"isLive":true,"originalViewCount":"123"}'
         cases = (
+            ("fixture", FIXTURE.read_text(encoding="utf-8"), 1),
             (
                 "multiple-digits",
                 key + '{"isLive":true,"originalViewCount":"12345"}',
