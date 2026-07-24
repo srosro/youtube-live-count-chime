@@ -51,12 +51,13 @@ app-only access token (no per-user browser login):
 
 1. Create an application at <https://dev.twitch.tv/console/apps>.
 2. Copy its **Client ID** and generate a **Client Secret**.
-3. Export both before running (avoid inlining the secret into shell history —
-   prefer a sourced env file or your shell's history-off prefix):
+3. Export both before running (keep the secret out of shell history — set it in
+   your shell profile or a git-ignored env file you `source`, not inline on the
+   command line):
 
    ```bash
-   export TWITCH_CLIENT_ID=<your-client-id>
-   export TWITCH_CLIENT_SECRET=<your-client-secret>
+   export TWITCH_CLIENT_ID="your-client-id"
+   export TWITCH_CLIENT_SECRET="your-client-secret"
    ```
 
 The watcher exchanges these for an application token via the
@@ -81,11 +82,14 @@ Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 Each platform exposes a current total, not individual join and departure events.
 A join and a departure between polls can cancel out, and only the resulting
 displayed count is observable. Monitoring is limited to publicly live channels.
-The platforms signal an ended stream differently: Twitch reports it as offline
-and goes silent (the baseline resets), while YouTube's live page simply stops
-parsing, so the watcher warns each poll and keeps the last count until a new
-stream appears. A page or API response that cannot be parsed is likewise warned
-and skipped rather than turned into a false chime.
+
+The two sources also handle an ended stream differently. The Twitch source
+receives an explicit offline signal, so it goes silent and clears that
+channel's baseline. The YouTube source cannot tell an ended stream from an
+unparseable page — both raise the same error — so it warns each poll and keeps
+the last count. Either way, when a new stream starts it re-baselines silently
+(a different stream never chimes against the previous one's count), so a fetch
+failure is never turned into a false chime.
 
 ## Development
 
