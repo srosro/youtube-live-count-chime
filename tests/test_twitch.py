@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from email.message import Message
+from http.client import BadStatusLine
 import json
 import os
 import threading
@@ -62,7 +63,7 @@ class _FakeHttp:
                 self.streams_calls += 1
                 self.streams_auth.append(request.get_header("Authorization"))
                 result = self.streams.pop(0)
-        if isinstance(result, HTTPError):
+        if isinstance(result, Exception):
             raise result
         return _FakeResponse(result)
 
@@ -171,6 +172,15 @@ class TwitchClientTests(unittest.TestCase):
                 client.stream(TARGET)
         self.assertIn("500", str(ctx.exception))
         self.assertIn("streams", str(ctx.exception))
+
+    def test_transport_exception_becomes_twitch_error(self) -> None:
+        http = _FakeHttp(
+            token=[{"access_token": "tok"}], streams=[BadStatusLine("garbage")]
+        )
+        client = TwitchClient(CREDS)
+        with patch("youtube_live_count_chime.twitch.urlopen", http):
+            with self.assertRaises(TwitchError):
+                client.stream(TARGET)
 
     def test_token_endpoint_error_names_token_not_streams(self) -> None:
         http = _FakeHttp(token=[_http_error(403)], streams=[])

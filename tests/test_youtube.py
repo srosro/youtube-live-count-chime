@@ -1,4 +1,4 @@
-from http.client import IncompleteRead
+from http.client import BadStatusLine, IncompleteRead
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -110,18 +110,22 @@ class ParseLivePageTests(unittest.TestCase):
 
 
 class FetchViewerCountTests(unittest.TestCase):
-    def test_normalizes_incomplete_response_to_viewer_count_error(self) -> None:
-        with (
-            patch(
-                "youtube_live_count_chime.youtube.urlopen",
-                side_effect=IncompleteRead(b"partial", 100),
-            ),
-            self.assertRaisesRegex(
-                ViewerCountError,
-                "could not fetch the livestream page",
-            ),
-        ):
-            fetch_viewer_count("https://example.test/live")
+    def test_normalizes_http_client_failures_to_viewer_count_error(self) -> None:
+        # IncompleteRead and BadStatusLine are both http.client.HTTPException
+        # subtypes; the latter is not an OSError, so it needs the widened catch.
+        for error in (IncompleteRead(b"partial", 100), BadStatusLine("garbage")):
+            with self.subTest(error=type(error).__name__):
+                with (
+                    patch(
+                        "youtube_live_count_chime.youtube.urlopen",
+                        side_effect=error,
+                    ),
+                    self.assertRaisesRegex(
+                        ViewerCountError,
+                        "could not fetch the livestream page",
+                    ),
+                ):
+                    fetch_viewer_count("https://example.test/live")
 
 
 class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
@@ -149,7 +153,7 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(YouTubeSource.for_handle("  ltt ").name, "youtube:ltt")
 
     def test_for_handle_rejects_unusable_handles(self) -> None:
-        for bad in ("@", "   ", "a b"):
+        for bad in ("@", "   ", "a b", "mkbhd/videos", "@@mkbhd", "mkbhd?x=1"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 YouTubeSource.for_handle(bad)
 
@@ -161,9 +165,10 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
         ) as fetcher:
             source = YouTubeSource.for_handle("@x", poll_interval=0.0)
 
-            snapshot = await anext(source.snapshots())
+            with self.assertLogs("youtube_live_count_chime.youtube", "WARNING"):
+                snapshot = await anext(source.snapshots())
 
-        self.assertEqual(fetcher.call_count, 2)  # first fetch failed, retried
+        self.assertEqual(fetcher.call_count, 2)
         self.assertEqual(snapshot.viewers, 7)
 
 

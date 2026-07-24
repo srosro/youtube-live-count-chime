@@ -5,7 +5,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Protocol, Self
+import re
+from typing import Final, Literal, Protocol, Self
+
+
+# YouTube handles allow letters, digits, ., _, - ; Twitch logins are a subset.
+# Both platforms resolve handles case-insensitively, so a lowercased handle is
+# safe to interpolate straight into the fetch URL.
+_HANDLE_PATTERN: Final = re.compile(r"[a-z0-9._-]+")
 
 
 class Platform(StrEnum):
@@ -20,10 +27,12 @@ def normalize_handle(value: str) -> str:
 
     Strips surrounding whitespace and a leading ``@`` and lowercases, so
     ``@MKBHD`` and ``mkbhd`` resolve to one target. Raises ``ValueError`` for
-    an empty handle or one containing interior whitespace.
+    an empty handle or one carrying URL-significant characters (``/``, ``?``,
+    spaces, a second ``@``), which would otherwise be interpolated straight
+    into a fetch URL and fail every poll.
     """
     normalized = value.strip().removeprefix("@").strip().lower()
-    if not normalized or any(char.isspace() for char in normalized):
+    if not _HANDLE_PATTERN.fullmatch(normalized):
         raise ValueError(f"invalid channel handle: {value!r}")
     return normalized
 

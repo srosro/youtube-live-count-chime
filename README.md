@@ -51,11 +51,11 @@ app-only access token (no per-user browser login):
 
 1. Create an application at <https://dev.twitch.tv/console/apps>.
 2. Copy its **Client ID** and generate a **Client Secret**.
-3. Export both before running (keep the secret out of shell history — set it in
-   your shell profile or a git-ignored env file you `source`, not inline on the
-   command line):
+3. Put both in a git-ignored file you `source` (rather than typing the secret
+   inline, where it lands in shell history):
 
    ```bash
+   # twitch.env — add to .gitignore, then: source twitch.env
    export TWITCH_CLIENT_ID="your-client-id"
    export TWITCH_CLIENT_SECRET="your-client-secret"
    ```
@@ -83,13 +83,15 @@ Each platform exposes a current total, not individual join and departure events.
 A join and a departure between polls can cancel out, and only the resulting
 displayed count is observable. Monitoring is limited to publicly live channels.
 
-The two sources also handle an ended stream differently. The Twitch source
-receives an explicit offline signal, so it goes silent and clears that
-channel's baseline. The YouTube source cannot tell an ended stream from an
-unparseable page — both raise the same error — so it warns each poll and keeps
-the last count. Either way, when a new stream starts it re-baselines silently
-(a different stream never chimes against the previous one's count), so a fetch
-failure is never turned into a false chime.
+A failed poll — an unreachable page, or an unparseable YouTube page or Helix
+response — yields no observation at all, so it never chimes on its own. The two
+sources differ in what they do while a stream is down: the Twitch source gets an
+explicit offline signal and clears that channel's baseline, while the YouTube
+source cannot tell an ended stream from an unparseable page and simply keeps the
+last count, warning each poll. Because a new broadcast has a different stream id,
+it re-baselines silently instead of chiming against the old count. One caveat of
+keeping the last count: if the *same* stream returns after a long gap, the next
+observation chimes once for the whole accumulated drift.
 
 ## Development
 
