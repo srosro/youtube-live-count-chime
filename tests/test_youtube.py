@@ -144,6 +144,28 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.viewers, 12)
         self.assertEqual(snapshot.url, "https://www.youtube.com/watch?v=afTqXQQhYrY")
 
+    def test_for_handle_normalizes_prefix_and_case(self) -> None:
+        self.assertEqual(YouTubeSource.for_handle("@MKBHD").name, "youtube:mkbhd")
+        self.assertEqual(YouTubeSource.for_handle("  ltt ").name, "youtube:ltt")
+
+    def test_for_handle_rejects_unusable_handles(self) -> None:
+        for bad in ("@", "   ", "a b"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                YouTubeSource.for_handle(bad)
+
+    async def test_snapshots_warns_and_retries_after_a_fetch_error(self) -> None:
+        page = YouTubeLivePage("vid", "https://www.youtube.com/watch?v=vid", 7)
+        with patch(
+            "youtube_live_count_chime.youtube.fetch_live_page",
+            side_effect=[ViewerCountError("boom"), page],
+        ) as fetcher:
+            source = YouTubeSource.for_handle("@x", poll_interval=0.0)
+
+            snapshot = await anext(source.snapshots())
+
+        self.assertEqual(fetcher.call_count, 2)  # first fetch failed, retried
+        self.assertEqual(snapshot.viewers, 7)
+
 
 if __name__ == "__main__":
     unittest.main()

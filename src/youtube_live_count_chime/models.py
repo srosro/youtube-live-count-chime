@@ -15,6 +15,19 @@ class Platform(StrEnum):
     TWITCH = "twitch"
 
 
+def normalize_handle(value: str) -> str:
+    """Normalize a channel handle/login to a dedup key, rejecting unusable input.
+
+    Strips surrounding whitespace and a leading ``@`` and lowercases, so
+    ``@MKBHD`` and ``mkbhd`` resolve to one target. Raises ``ValueError`` for
+    an empty handle or one containing interior whitespace.
+    """
+    normalized = value.strip().removeprefix("@").strip().lower()
+    if not normalized or any(char.isspace() for char in normalized):
+        raise ValueError(f"invalid channel handle: {value!r}")
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class StreamTarget:
     """A named channel or account on one platform."""

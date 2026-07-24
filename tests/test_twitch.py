@@ -165,6 +165,14 @@ class TwitchClientTests(unittest.TestCase):
 
 
 class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
+    def test_for_login_normalizes_and_rejects(self) -> None:
+        self.assertEqual(
+            TwitchSource.for_login("@Shroud", TwitchClient(CREDS)).name, "twitch:shroud"
+        )
+        for bad in ("@", "  "):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                TwitchSource.for_login(bad, TwitchClient(CREDS))
+
     async def test_yields_live_then_offline_snapshots(self) -> None:
         source = TwitchSource.for_login("Shroud", TwitchClient(CREDS), poll_interval=0.0)
         payloads: Iterator[object] = iter(

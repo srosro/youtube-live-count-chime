@@ -127,15 +127,11 @@ def build_sources(config: Config) -> list[StreamSource]:
             sources.append(source)
 
     for handle in config.youtube:
-        if not handle.strip():
-            raise ValueError("--youtube handle cannot be empty")
         add(YouTubeSource.for_handle(handle, poll_interval=config.poll_interval))
 
     if config.twitch:
         client = TwitchClient(TwitchCredentials.from_env())
         for login in config.twitch:
-            if not login.strip():
-                raise ValueError("--twitch login cannot be empty")
             add(TwitchSource.for_login(login, client, poll_interval=config.poll_interval))
 
     return sources

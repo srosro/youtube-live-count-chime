@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from http.client import HTTPException
 import json
 from json import JSONDecodeError
 import logging
@@ -15,7 +16,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarget
+from youtube_live_count_chime.models import (
+    Platform,
+    StreamSnapshot,
+    StreamTarget,
+    normalize_handle,
+)
 
 
 TOKEN_URL: Final = "https://id.twitch.tv/oauth2/token"
@@ -94,7 +100,7 @@ def _get_json(request: Request) -> object:
             return cast(object, json.loads(cast(bytes, response.read())))
     except HTTPError:
         raise
-    except (URLError, OSError, JSONDecodeError, UnicodeDecodeError) as error:
+    except (URLError, HTTPException, OSError, JSONDecodeError, UnicodeDecodeError) as error:
         raise TwitchError(
             f"Twitch request failed ({type(error).__name__})"
         ) from error
@@ -195,8 +201,7 @@ class TwitchSource:
         poll_interval: float = 5.0,
     ) -> Self:
         """Create a source that polls one Twitch login, sharing one app token."""
-        normalized = login.removeprefix("@").lower()
-        target = StreamTarget(Platform.TWITCH, normalized)
+        target = StreamTarget(Platform.TWITCH, normalize_handle(login))
         return cls(
             name=target.key,
             target=target,

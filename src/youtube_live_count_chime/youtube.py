@@ -6,14 +6,19 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from html import unescape
-from http.client import IncompleteRead
+from http.client import HTTPException
 from json import JSONDecodeError, JSONDecoder
 import logging
 import re
 from typing import Final, Self, cast
 from urllib.request import Request, urlopen
 
-from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarget
+from youtube_live_count_chime.models import (
+    Platform,
+    StreamSnapshot,
+    StreamTarget,
+    normalize_handle,
+)
 
 
 USER_AGENT: Final = (
@@ -100,7 +105,7 @@ def _download_page(url: str) -> str:
     try:
         with urlopen(request, timeout=10.0) as response:
             return cast(bytes, response.read()).decode("utf-8", errors="replace")
-    except (IncompleteRead, OSError) as error:
+    except (HTTPException, OSError) as error:
         raise ViewerCountError(f"could not fetch the livestream page: {error}") from error
 
 
@@ -126,7 +131,7 @@ class YouTubeSource:
     @classmethod
     def for_handle(cls, handle: str, *, poll_interval: float = 5.0) -> Self:
         """Create a source that discovers the current stream for a handle."""
-        normalized_handle = handle.removeprefix("@")
+        normalized_handle = normalize_handle(handle)
         target = StreamTarget(Platform.YOUTUBE, normalized_handle)
         return cls(
             name=target.key,

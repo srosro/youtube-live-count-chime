@@ -57,9 +57,9 @@ class BuildSourcesTests(unittest.TestCase):
 
         self.assertEqual([source.name for source in sources], ["youtube:mkbhd", "youtube:ltt"])
 
-    def test_deduplicates_repeated_handles(self) -> None:
+    def test_deduplicates_handles_across_prefix_and_case(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            sources = build_sources(parse_config(["-y", "@mkbhd", "-y", "mkbhd"]))
+            sources = build_sources(parse_config(["-y", "@MKBHD", "-y", "mkbhd"]))
 
         self.assertEqual([source.name for source in sources], ["youtube:mkbhd"])
 
