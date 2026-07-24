@@ -10,7 +10,7 @@ from unittest.mock import patch
 from youtube_live_count_chime.cli import build_sources, main, parse_config
 from youtube_live_count_chime.monitor import ChimeConfig
 from youtube_live_count_chime.models import StreamSource
-from youtube_live_count_chime.twitch import TwitchError
+from youtube_live_count_chime.twitch import TwitchError, TwitchSource
 
 
 class ParseConfigTests(unittest.TestCase):
@@ -76,6 +76,15 @@ class BuildSourcesTests(unittest.TestCase):
         self.assertEqual(
             [source.name for source in sources], ["youtube:mkbhd", "twitch:shroud"]
         )
+
+    def test_twitch_logins_share_one_client(self) -> None:
+        env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
+        with patch.dict(os.environ, env, clear=True):
+            sources = build_sources(parse_config(["-t", "a", "-t", "b"]))
+
+        twitch = [source for source in sources if isinstance(source, TwitchSource)]
+        self.assertEqual(len(twitch), 2)
+        self.assertEqual(len({id(source.client) for source in twitch}), 1)
 
 
 class MainTests(unittest.TestCase):

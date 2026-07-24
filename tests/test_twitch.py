@@ -1,9 +1,11 @@
 from collections.abc import Iterator
+from email.message import Message
 import json
 import os
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
+from urllib.request import Request
 
 from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.twitch import (
@@ -47,14 +49,16 @@ class _FakeHttp:
         self.streams = list(streams or [])
         self.token_calls = 0
         self.streams_calls = 0
+        self.streams_auth: list[str | None] = []
 
-    def __call__(self, request: object, timeout: float | None = None) -> _FakeResponse:
-        url = getattr(request, "full_url", "")
+    def __call__(self, request: Request, timeout: float | None = None) -> _FakeResponse:
+        url = request.full_url
         if "oauth2/token" in url:
             self.token_calls += 1
             result = self.token.pop(0)
         else:
             self.streams_calls += 1
+            self.streams_auth.append(request.get_header("Authorization"))
             result = self.streams.pop(0)
         if isinstance(result, HTTPError):
             raise result
@@ -62,7 +66,7 @@ class _FakeHttp:
 
 
 def _http_error(code: int) -> HTTPError:
-    return HTTPError("https://twitch.test", code, "error", None, None)  # type: ignore[arg-type]
+    return HTTPError("https://twitch.test", code, "error", Message(), None)
 
 
 LIVE = {"data": [{"id": "1", "user_login": "shroud", "viewer_count": 5}]}
@@ -129,7 +133,7 @@ class TwitchClientTests(unittest.TestCase):
             client.stream(TARGET)
         self.assertEqual((http.token_calls, http.streams_calls), (1, 2))
 
-    def test_refreshes_token_once_after_401(self) -> None:
+    def test_refreshes_token_once_after_401_and_retries_with_new_token(self) -> None:
         http = _FakeHttp(
             token=[{"access_token": "old"}, {"access_token": "new"}],
             streams=[_http_error(401), LIVE],
@@ -139,6 +143,7 @@ class TwitchClientTests(unittest.TestCase):
             snapshot = client.stream(TARGET)
         self.assertEqual(snapshot.viewers, 5)
         self.assertEqual((http.token_calls, http.streams_calls), (2, 2))
+        self.assertEqual(http.streams_auth, ["Bearer old", "Bearer new"])
 
     def test_non_401_streams_error_names_status(self) -> None:
         http = _FakeHttp(token=[{"access_token": "tok"}], streams=[_http_error(500)])

@@ -9,6 +9,7 @@ import json
 from json import JSONDecodeError
 import logging
 import os
+import threading
 from typing import Final, Self, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -96,19 +97,25 @@ def _get_json(request: Request) -> object:
     except (URLError, OSError, JSONDecodeError, UnicodeDecodeError) as error:
         raise TwitchError(
             f"Twitch request failed ({type(error).__name__})"
-        ) from None
+        ) from error
 
 
 class TwitchClient:
-    """Fetch Helix stream data with a cached client-credentials app token."""
+    """Fetch Helix stream data with a cached client-credentials app token.
 
-    __slots__ = ("credentials", "_app_token")
+    One client is shared across all Twitch sources; polls run in worker
+    threads, so a lock serializes token fetches — N logins share one token
+    instead of each fetching its own.
+    """
+
+    __slots__ = ("credentials", "_app_token", "_token_lock")
 
     def __init__(self, credentials: TwitchCredentials) -> None:
         self.credentials = credentials
         self._app_token: str | None = None
+        self._token_lock = threading.Lock()
 
-    def _fetch_app_token(self) -> str:
+    def _fetch_app_token_locked(self) -> str:
         request = Request(
             TOKEN_URL,
             data=urlencode(
@@ -129,7 +136,17 @@ class TwitchClient:
         return token
 
     def _app_token_value(self) -> str:
-        return self._app_token if self._app_token is not None else self._fetch_app_token()
+        with self._token_lock:
+            token = self._app_token
+            return token if token is not None else self._fetch_app_token_locked()
+
+    def _refresh_token(self, used: str) -> str:
+        with self._token_lock:
+            # Skip the fetch if another thread already rotated the token.
+            if self._app_token != used:
+                assert self._app_token is not None
+                return self._app_token
+            return self._fetch_app_token_locked()
 
     def _get_streams(self, token: str, target: StreamTarget) -> StreamSnapshot:
         request = Request(
@@ -148,13 +165,14 @@ class TwitchClient:
 
     def stream(self, target: StreamTarget) -> StreamSnapshot:
         """Return the target's snapshot, refreshing the token once after HTTP 401."""
+        token = self._app_token_value()
         try:
-            return self._get_streams(self._app_token_value(), target)
+            return self._get_streams(token, target)
         except HTTPError as error:
             if error.code != 401:
                 raise self._streams_error(error) from error
         try:
-            return self._get_streams(self._fetch_app_token(), target)
+            return self._get_streams(self._refresh_token(token), target)
         except HTTPError as error:
             raise self._streams_error(error) from error
 
