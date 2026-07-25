@@ -120,30 +120,26 @@ LaunchAgent. From a checkout of this repo, with the package installed and
 `.venv/bin`), run the helper script with the channels you want watched:
 
 ```bash
-scripts/install-launchagent.sh -y @srosrosr -t watchmepivot -t samtriestobuild
+scripts/install-launchagent.sh -y @srosrosr -y @watchmepivot
 ```
 
-That writes a LaunchAgent (`~/Library/LaunchAgents/com.youtube-live-count-chime.watcher.plist`)
-that starts at login and restarts the watcher if it exits, logging to
-`~/Library/Logs/count-chime.log`. Because a LaunchAgent runs in your GUI
-session, the chimes play through your speakers.
-
-Twitch credentials are read at runtime from `~/.config/count-chime/env` (never
-written into the plist), so create that file first if you watch any Twitch
-channels. Open it in your editor and add your real values:
-
-```
-export TWITCH_CLIENT_ID=your-client-id
-export TWITCH_CLIENT_SECRET=your-client-secret
-```
-
-Then restrict it to your account:
+For Twitch channels, point `--env-file` at a file that exports your
+`TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` — the `twitch.env` from the
+[Twitch](#twitch) section works directly. It is copied into the service's
+config with owner-only permissions and read at runtime, never written into the
+plist:
 
 ```bash
-chmod 600 ~/.config/count-chime/env
+scripts/install-launchagent.sh --env-file twitch.env \
+  -y @srosrosr -t watchmepivot -t samtriestobuild
 ```
 
-Re-run the script with new flags to change channels. To stop it:
+The LaunchAgent (`~/Library/LaunchAgents/com.youtube-live-count-chime.watcher.plist`)
+starts at login and restarts the watcher if it exits, logging to
+`~/Library/Logs/count-chime.log`. Because it runs in your GUI session, the
+chimes play through your speakers.
+
+Re-run the script to change channels or refresh credentials. To stop it:
 
 ```bash
 launchctl unload -w ~/Library/LaunchAgents/com.youtube-live-count-chime.watcher.plist
