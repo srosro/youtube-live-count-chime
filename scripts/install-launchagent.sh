@@ -39,11 +39,16 @@ plist="$HOME/Library/LaunchAgents/$label.plist"
 # If any Twitch channel is requested (--twitch, its unique prefixes, or -t),
 # the credentials file must resolve to non-empty values — otherwise the agent
 # exits 2 and KeepAlive respawns it forever. Fail fast at install time instead.
-# Source it in a subshell (as the runtime wrapper does) so an empty or
-# commented-out assignment is caught, and the values are never printed.
+# The subshell first unsets the two vars so it validates the file's values in
+# isolation (matching launchd's minimal environment, not the installing shell),
+# then sources the file the same way the runtime wrapper does. Placeholder
+# values can't be detected here — those surface as a logged warning at runtime.
 if printf '%s\n' "$@" | grep -qE '^(-t|--t)'; then
-    ( set -a; source "$env_file"; [ -n "${TWITCH_CLIENT_ID:-}" ] &&
-        [ -n "${TWITCH_CLIENT_SECRET:-}" ]; ) 2>/dev/null || {
+    ( unset TWITCH_CLIENT_ID TWITCH_CLIENT_SECRET
+        set -a
+        source "$env_file"
+        [ -n "${TWITCH_CLIENT_ID:-}" ] && [ -n "${TWITCH_CLIENT_SECRET:-}" ]; ) \
+        2>/dev/null || {
         echo "Watching Twitch needs non-empty TWITCH_CLIENT_ID and" >&2
         echo "TWITCH_CLIENT_SECRET in $env_file (see the README), then re-run." >&2
         exit 1
