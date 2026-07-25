@@ -25,6 +25,10 @@ while [ "$#" -gt 0 ]; do
         --env-file) [ "$#" -ge 2 ] || { echo "--env-file needs a path" >&2; exit 2; }
             src_env="$2"; shift 2 ;;
         --env-file=*) src_env="${1#--env-file=}"; shift ;;
+        # Flags that make the watcher exit without running would just
+        # respawn-loop under KeepAlive if baked into the agent's command.
+        --check | -h | --help)
+            echo "$1 is not a channel flag for the agent" >&2; exit 2 ;;
         *) watch_args+=("$1"); shift ;;
     esac
 done
@@ -53,33 +57,40 @@ wrapper="$conf_dir/run.sh"
 log="$HOME/Library/Logs/count-chime.log"
 plist="$HOME/Library/LaunchAgents/$label.plist"
 
-[ -z "$src_env" ] || [ -r "$src_env" ] || {
-    echo "--env-file not readable: $src_env" >&2
-    exit 1
-}
+if [ -n "$src_env" ]; then
+    [ -r "$src_env" ] || { echo "--env-file not readable: $src_env" >&2; exit 1; }
+    src_env="$(CDPATH= cd -- "$(dirname "$src_env")" && pwd)/$(basename "$src_env")"
+fi
 
 # Validate the whole configuration through the canonical CLI before changing
 # anything on disk — otherwise a bad reinstall could overwrite working
-# credentials, or KeepAlive could respawn an agent that just exits. The subshell
-# unsets the two vars so it validates the candidate credentials in isolation
-# (matching launchd's minimal environment, not the installing shell); `--check`
+# credentials, or KeepAlive could respawn an agent that just exits. `--check`
 # runs the same parse_config/build_sources the watcher uses, so a malformed
 # flag, a bad handle, or missing/empty Twitch credentials all fail here.
+# (It cannot check that credentials actually authenticate or that a handle is
+# live — those surface as a logged warning at runtime.) The subshell mirrors
+# the agent's runtime environment: cd / (launchd's cwd, so a relative sound
+# path is caught) and the two vars unset before sourcing the candidate file
+# (so the installing shell's exported credentials can't mask an empty file).
 candidate_env="${src_env:-$env_file}"
-( unset TWITCH_CLIENT_ID TWITCH_CLIENT_SECRET
+( set +e
+    cd /
+    unset TWITCH_CLIENT_ID TWITCH_CLIENT_SECRET
     set -a
     [ -r "$candidate_env" ] && source "$candidate_env"
     set +a
     "$bin" --check "$@" >/dev/null ) || {
     echo "Configuration is invalid — nothing was changed (see the error above)." >&2
-    echo "For Twitch, pass --env-file with a file exporting your credentials." >&2
     exit 1
 }
 
 # Validation passed; now commit to disk.
 mkdir -p "$conf_dir" "$HOME/Library/LaunchAgents" "$(dirname "$log")"
 chmod 700 "$conf_dir" # this directory holds the credentials file
-[ -z "$src_env" ] || install -m 600 -- "$src_env" "$env_file"
+# Copy the credentials in (unless --env-file already points at the destination).
+if [ -n "$src_env" ] && ! [ "$src_env" -ef "$env_file" ]; then
+    install -m 600 -- "$src_env" "$env_file"
+fi
 
 # Write both files to temp paths first, so the still-running old agent never
 # reads a half-written wrapper and an interrupted write can't leave a corrupt

@@ -83,7 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="validate the configuration (flags, handles, credentials) and exit",
+        help="validate flags, handles, and that Twitch credentials are set, then exit",
     )
     return parser
 
