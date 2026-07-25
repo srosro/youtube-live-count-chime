@@ -134,9 +134,12 @@ channels:
 
 ```bash
 mkdir -p ~/.config/count-chime
-printf 'export TWITCH_CLIENT_ID=%s\nexport TWITCH_CLIENT_SECRET=%s\n' \
-  "$TWITCH_CLIENT_ID" "$TWITCH_CLIENT_SECRET" > ~/.config/count-chime/env
+cat > ~/.config/count-chime/env <<'ENV'
+export TWITCH_CLIENT_ID="your-client-id"
+export TWITCH_CLIENT_SECRET="your-client-secret"
+ENV
 chmod 600 ~/.config/count-chime/env
+# then edit the file to fill in your real values
 ```
 
 Re-run the script with new flags to change channels. To stop it:
