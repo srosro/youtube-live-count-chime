@@ -44,13 +44,18 @@ plist="$HOME/Library/LaunchAgents/$label.plist"
 # then sources the file the same way the runtime wrapper does. Placeholder
 # values can't be detected here — those surface as a logged warning at runtime.
 if printf '%s\n' "$@" | grep -qE '^(-t|--t)'; then
+    [ -r "$env_file" ] || {
+        echo "Twitch credentials file not found: $env_file" >&2
+        echo "Create it first (see the README), then re-run." >&2
+        exit 1
+    }
     ( unset TWITCH_CLIENT_ID TWITCH_CLIENT_SECRET
         set -a
         source "$env_file"
         [ -n "${TWITCH_CLIENT_ID:-}" ] && [ -n "${TWITCH_CLIENT_SECRET:-}" ]; ) \
         2>/dev/null || {
-        echo "Watching Twitch needs non-empty TWITCH_CLIENT_ID and" >&2
-        echo "TWITCH_CLIENT_SECRET in $env_file (see the README), then re-run." >&2
+        echo "TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET must be set (non-empty) in" >&2
+        echo "$env_file (see the README), then re-run." >&2
         exit 1
     }
 fi
@@ -61,17 +66,19 @@ chmod 700 "$conf_dir" # this directory holds the credentials file
 # Wrapper: source credentials (kept out of the plist) then exec the watcher.
 # printf %q quotes the binary path and every flag safely; write via a temp file
 # and mv so the still-running old agent never reads a half-written script.
-tmp="$wrapper.tmp.$$"
-trap 'rm -f "$tmp"' EXIT
+wrapper_tmp="$wrapper.tmp.$$"
+plist_tmp="$plist.tmp.$$"
+trap 'rm -f "$wrapper_tmp" "$plist_tmp"' EXIT
+
+# printf %q quotes the binary path and every flag safely.
 {
     printf 'set -a\n[ -f %q ] && source %q\nset +a\nexec %q' \
         "$env_file" "$env_file" "$bin"
     printf ' %q' "$@"
     printf '\n'
-} >"$tmp"
-mv -f "$tmp" "$wrapper"
+} >"$wrapper_tmp"
 
-cat >"$plist" <<PLIST
+cat >"$plist_tmp" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -88,9 +95,13 @@ cat >"$plist" <<PLIST
 </plist>
 PLIST
 
-# Swap to the new agent only after both files are on disk, so a failed write
-# leaves the previous instance running rather than stopped.
+# Both files are written to temp paths first, so the still-running old agent
+# never reads a half-written wrapper and an interrupted write can't leave a
+# corrupt plist. Unload the old instance (reading the on-disk old plist), then
+# mv both new files into place atomically and load.
 launchctl unload "$plist" 2>/dev/null || true
+mv -f "$wrapper_tmp" "$wrapper"
+mv -f "$plist_tmp" "$plist"
 launchctl load -w "$plist"
 
 echo "Loaded $label."

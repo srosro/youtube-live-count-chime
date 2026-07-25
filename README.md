@@ -134,12 +134,11 @@ channels:
 
 ```bash
 mkdir -p ~/.config/count-chime
-cat > ~/.config/count-chime/env <<'ENV'
-export TWITCH_CLIENT_ID="your-client-id"
-export TWITCH_CLIENT_SECRET="your-client-secret"
-ENV
-chmod 600 ~/.config/count-chime/env
-# then edit the file to fill in your real values
+read -r  "?Twitch Client ID: " id 2>/dev/null || read -rp  "Twitch Client ID: " id
+read -rs "?Twitch Client Secret: " secret 2>/dev/null || read -rsp "Twitch Client Secret: " secret; echo
+( umask 177; printf 'export TWITCH_CLIENT_ID=%q\nexport TWITCH_CLIENT_SECRET=%q\n' \
+    "$id" "$secret" > ~/.config/count-chime/env )
+unset id secret
 ```
 
 Re-run the script with new flags to change channels. To stop it:
