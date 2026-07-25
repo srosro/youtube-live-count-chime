@@ -60,12 +60,11 @@ launchctl unload "$plist" 2>/dev/null || true
 # and mv so a concurrent respawn can never read a half-written script.
 tmp="$wrapper.tmp.$$"
 {
-    printf '#!/usr/bin/env bash\nset -a\n[ -f %q ] && source %q\nset +a\nexec %q' \
+    printf 'set -a\n[ -f %q ] && source %q\nset +a\nexec %q' \
         "$env_file" "$env_file" "$bin"
     printf ' %q' "$@"
     printf '\n'
 } >"$tmp"
-chmod +x "$tmp"
 mv -f "$tmp" "$wrapper"
 
 cat >"$plist" <<PLIST

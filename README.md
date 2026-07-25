@@ -115,9 +115,9 @@ Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 ## Run at login (macOS)
 
 To keep the watcher running automatically, install it as a launchd
-LaunchAgent. With the package installed and `youtube-live-count-chime` on your
-`PATH` (activate the venv, or use its `.venv/bin`), pass the channels you want
-watched:
+LaunchAgent. From a checkout of this repo, with the package installed and
+`youtube-live-count-chime` on your `PATH` (activate the venv, or use its
+`.venv/bin`), run the helper script with the channels you want watched:
 
 ```bash
 scripts/install-launchagent.sh -y @srosrosr -t watchmepivot -t samtriestobuild
