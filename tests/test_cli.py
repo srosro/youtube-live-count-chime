@@ -127,6 +127,16 @@ class MainTests(_CliTestCase):
     def test_no_handles_exits_2(self) -> None:
         self.assertEqual(main(self.argv()), 2)
 
+    def test_check_validates_and_exits_zero_without_watching(self) -> None:
+        # Returns 0 (rather than hanging in the monitor loop) → --check
+        # short-circuits after build_sources.
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(main(self.argv("--check", "-y", "@mkbhd")), 0)
+
+    def test_check_fails_on_missing_twitch_creds(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(main(self.argv("--check", "-t", "shroud")), 2)
+
     def test_missing_twitch_creds_exits_2(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(main(self.argv("-t", "shroud")), 2)

@@ -34,6 +34,7 @@ class Config:
     twitch: tuple[str, ...]
     up_sound: Path
     down_sound: Path
+    check: bool
 
 
 def _sound_file(value: str) -> Path:
@@ -79,6 +80,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_DOWN_SOUND,
         help="sound played when a viewer count falls",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate the configuration (flags, handles, credentials) and exit",
+    )
     return parser
 
 
@@ -90,6 +96,7 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         twitch=tuple(cast("list[str]", namespace.twitch)),
         up_sound=cast(Path, namespace.up_sound),
         down_sound=cast(Path, namespace.down_sound),
+        check=cast(bool, namespace.check),
     )
 
 
@@ -130,6 +137,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ValueError, TwitchError) as error:
         print(f"Error: {error}", file=sys.stderr, flush=True)
         return 2
+
+    if config.check:
+        print(f"OK — {len(sources)} channel(s).", flush=True)
+        return 0
 
     chime = ChimeConfig(config.up_sound, config.down_sound)
     names = ", ".join(source.name for source in sources)

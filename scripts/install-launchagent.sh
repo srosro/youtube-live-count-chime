@@ -53,38 +53,33 @@ wrapper="$conf_dir/run.sh"
 log="$HOME/Library/Logs/count-chime.log"
 plist="$HOME/Library/LaunchAgents/$label.plist"
 
+[ -z "$src_env" ] || [ -r "$src_env" ] || {
+    echo "--env-file not readable: $src_env" >&2
+    exit 1
+}
+
+# Validate the whole configuration through the canonical CLI before changing
+# anything on disk — otherwise a bad reinstall could overwrite working
+# credentials, or KeepAlive could respawn an agent that just exits. The subshell
+# unsets the two vars so it validates the candidate credentials in isolation
+# (matching launchd's minimal environment, not the installing shell); `--check`
+# runs the same parse_config/build_sources the watcher uses, so a malformed
+# flag, a bad handle, or missing/empty Twitch credentials all fail here.
+candidate_env="${src_env:-$env_file}"
+( unset TWITCH_CLIENT_ID TWITCH_CLIENT_SECRET
+    set -a
+    [ -r "$candidate_env" ] && source "$candidate_env"
+    set +a
+    "$bin" --check "$@" >/dev/null ) || {
+    echo "Configuration is invalid — nothing was changed (see the error above)." >&2
+    echo "For Twitch, pass --env-file with a file exporting your credentials." >&2
+    exit 1
+}
+
+# Validation passed; now commit to disk.
 mkdir -p "$conf_dir" "$HOME/Library/LaunchAgents" "$(dirname "$log")"
 chmod 700 "$conf_dir" # this directory holds the credentials file
-
-# Copy the supplied credentials into place with owner-only permissions.
-if [ -n "$src_env" ]; then
-    [ -r "$src_env" ] || { echo "--env-file not readable: $src_env" >&2; exit 1; }
-    install -m 600 -- "$src_env" "$env_file"
-fi
-
-# If any Twitch channel is requested (--twitch, its unique prefixes, or -t), the
-# credentials file must resolve to non-empty values — otherwise the agent exits
-# 2 and KeepAlive respawns it forever. Fail fast at install time instead. The
-# subshell unsets the two vars first so it validates the file's values in
-# isolation (matching launchd's minimal environment, not the installing shell).
-# Placeholder/invalid values can't be caught here — those surface as a logged
-# warning at runtime.
-if printf '%s\n' "$@" | grep -qE '^(-t|--t)'; then
-    [ -r "$env_file" ] || {
-        echo "Watching Twitch needs credentials — pass --env-file PATH (see the" >&2
-        echo "README), then re-run." >&2
-        exit 1
-    }
-    ( unset TWITCH_CLIENT_ID TWITCH_CLIENT_SECRET
-        set -a
-        source "$env_file"
-        [ -n "${TWITCH_CLIENT_ID:-}" ] && [ -n "${TWITCH_CLIENT_SECRET:-}" ]; ) \
-        2>/dev/null || {
-        echo "TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET must be set (non-empty) in" >&2
-        echo "the --env-file (see the README), then re-run." >&2
-        exit 1
-    }
-fi
+[ -z "$src_env" ] || install -m 600 -- "$src_env" "$env_file"
 
 # Write both files to temp paths first, so the still-running old agent never
 # reads a half-written wrapper and an interrupted write can't leave a corrupt
