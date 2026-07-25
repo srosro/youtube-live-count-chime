@@ -130,15 +130,17 @@ session, the chimes play through your speakers.
 
 Twitch credentials are read at runtime from `~/.config/count-chime/env` (never
 written into the plist), so create that file first if you watch any Twitch
-channels:
+channels. Open it in your editor and add your real values:
+
+```
+export TWITCH_CLIENT_ID=your-client-id
+export TWITCH_CLIENT_SECRET=your-client-secret
+```
+
+Then restrict it to your account:
 
 ```bash
-mkdir -p ~/.config/count-chime
-read -r  "?Twitch Client ID: " id 2>/dev/null || read -rp  "Twitch Client ID: " id
-read -rs "?Twitch Client Secret: " secret 2>/dev/null || read -rsp "Twitch Client Secret: " secret; echo
-( umask 177; printf 'export TWITCH_CLIENT_ID=%q\nexport TWITCH_CLIENT_SECRET=%q\n' \
-    "$id" "$secret" > ~/.config/count-chime/env )
-unset id secret
+chmod 600 ~/.config/count-chime/env
 ```
 
 Re-run the script with new flags to change channels. To stop it:

@@ -66,8 +66,10 @@ chmod 700 "$conf_dir" # this directory holds the credentials file
 # Wrapper: source credentials (kept out of the plist) then exec the watcher.
 # printf %q quotes the binary path and every flag safely; write via a temp file
 # and mv so the still-running old agent never reads a half-written script.
+# Temp files live in conf_dir, not ~/Library/LaunchAgents, so a leftover temp
+# is never scanned by launchd; the mv into place stays atomic (same filesystem).
 wrapper_tmp="$wrapper.tmp.$$"
-plist_tmp="$plist.tmp.$$"
+plist_tmp="$conf_dir/plist.tmp.$$"
 trap 'rm -f "$wrapper_tmp" "$plist_tmp"' EXIT
 
 # printf %q quotes the binary path and every flag safely.
