@@ -112,6 +112,39 @@ at all.)
 
 Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 
+## Run at login (macOS)
+
+To keep the watcher running automatically, install it as a launchd
+LaunchAgent. With the package installed and `youtube-live-count-chime` on your
+`PATH` (activate the venv, or use its `.venv/bin`), pass the channels you want
+watched:
+
+```bash
+scripts/install-launchagent.sh -y @srosrosr -t watchmepivot -t samtriestobuild
+```
+
+That writes a LaunchAgent (`~/Library/LaunchAgents/com.youtube-live-count-chime.watcher.plist`)
+that starts at login and restarts the watcher if it exits, logging to
+`~/Library/Logs/count-chime.log`. Because a LaunchAgent runs in your GUI
+session, the chimes play through your speakers.
+
+Twitch credentials are read at runtime from `~/.config/count-chime/env` (never
+written into the plist), so create that file first if you watch any Twitch
+channels:
+
+```bash
+mkdir -p ~/.config/count-chime
+printf 'export TWITCH_CLIENT_ID=%s\nexport TWITCH_CLIENT_SECRET=%s\n' \
+  "$TWITCH_CLIENT_ID" "$TWITCH_CLIENT_SECRET" > ~/.config/count-chime/env
+chmod 600 ~/.config/count-chime/env
+```
+
+Re-run the script with new flags to change channels. To stop it:
+
+```bash
+launchctl unload -w ~/Library/LaunchAgents/com.youtube-live-count-chime.watcher.plist
+```
+
 ## Limitations
 
 Each platform exposes a current total, not individual join and departure events.
