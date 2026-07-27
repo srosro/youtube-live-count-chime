@@ -41,7 +41,12 @@ class TokenStore:
         # save() is a read-modify-write, and every watched channel refreshes
         # its own token through this one store from its own to_thread worker.
         # Without the lock two concurrent rotations interleave load-load-
-        # write-write and one account's new token is lost.
+        # write-write and one account's new token is lost. The lock is
+        # per-instance and in-process only: it serializes the watcher's own
+        # threads, not a second process (a concurrent `--auth` in another
+        # terminal), which can still overwrite a token this process just
+        # rotated. os.replace keeps that a lost update, never a corrupt store,
+        # and re-running `--auth` recovers it.
         self._lock = threading.Lock()
 
     def _load(self) -> dict[str, StoredToken]:
@@ -92,6 +97,12 @@ class TokenStore:
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump({k: asdict(v) for k, v in tokens.items()}, handle, indent=2)
+                # Closing only flushes to the page cache, so without this the
+                # rename can reach disk before the data: a power loss then
+                # leaves exactly the zero-length/partial tokens.json the
+                # atomic write exists to prevent.
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temp, self.path)
         except BaseException:
             temp.unlink(missing_ok=True)

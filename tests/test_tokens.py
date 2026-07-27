@@ -64,11 +64,14 @@ class TokenStoreTests(unittest.TestCase):
         with self.assertRaises(TokenStoreError):
             TokenStore(self.path).get("watchmepivot")
 
-    def test_existing_loose_file_is_tightened_before_writing(self) -> None:
+    def test_replacing_a_loose_store_is_owner_only_during_and_after_the_write(
+        self,
+    ) -> None:
         # Regression test: if tokens.json exists at 0644 (e.g., from an older
-        # version), the secrets must never be written to a file that is not
-        # already 0600 — narrowing the mode afterwards leaves them briefly
-        # world-readable.
+        # version), the secrets must never land in a world-readable file — not
+        # while they are being written, and not once the write is done. An
+        # implementation that copied the destination's mode across the replace
+        # would leave a 0644 file full of secrets.
         self.path.write_text("{}", encoding="utf-8")
         self.path.chmod(0o644)
 
@@ -91,6 +94,11 @@ class TokenStoreTests(unittest.TestCase):
         self.assertEqual(len(mode_at_write), 1, "json.dump should be called exactly once")
         self.assertEqual(
             mode_at_write[0], 0o600, "file mode must be 0600 when secrets are written"
+        )
+        self.assertEqual(
+            stat.S_IMODE(self.path.stat().st_mode),
+            0o600,
+            "the replaced store must not inherit the loose file's mode",
         )
 
     def test_a_crash_mid_write_leaves_the_previous_tokens_intact(self) -> None:
@@ -124,8 +132,9 @@ class TokenStoreTests(unittest.TestCase):
 
         def slow_dump(obj: object, fp: IO[str], *, indent: int | None = None) -> None:
             # Widen the window between the load and the write so an unlocked
-            # implementation loses a token deterministically.
-            time.sleep(0.05)
+            # implementation loses a token deterministically. It only has to
+            # outlast thread-start latency, so keep it small.
+            time.sleep(0.005)
             original_dump(obj, fp, indent=indent)
 
         with patch(
