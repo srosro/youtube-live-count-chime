@@ -92,14 +92,14 @@ source twitch.env   # exports TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET
   -y @watchmepivot
 ```
 
-On start it prints one line naming every channel it is watching, then runs
-until `Ctrl-C`. Each channel's first live count is a silent baseline; after
-that, a rise plays Glass and a fall plays Basso. A channel that isn't live
-never chimes — an offline Twitch channel is fully silent, while an offline
-YouTube channel logs a warning each poll (see [Limitations](#limitations)) —
-and it starts chiming automatically once it goes live. (If you only wanted the
-two YouTube channels, drop the `-t` flags and no Twitch credentials are needed
-at all.)
+On start it prints one line naming every channel it is watching, then runs until
+`Ctrl-C`. Each channel's first live count is a silent baseline; after that, a
+rise plays Glass and a fall plays Basso. A channel that isn't live never chimes
+— an offline Twitch channel is fully silent, while an offline YouTube channel
+logs one warning per outage and then goes quiet (see
+[Limitations](#limitations)) — and it starts chiming automatically once it goes
+live. (If you only wanted the two YouTube channels, drop the `-t` flags and no
+Twitch credentials are needed at all.)
 
 ## Options
 
@@ -156,11 +156,12 @@ response — yields no observation at all on either platform, so it never chimes
 on its own and the last count is kept. What differs is an *ended* stream: the
 Twitch source receives an explicit offline signal and clears that channel's
 baseline, while the YouTube source cannot tell an ended stream from an
-unparseable page and just keeps warning. Because a new broadcast has a different
-stream id, it re-baselines silently instead of chiming against the old count.
-One caveat of keeping the last count on any outage: if the *same* stream returns
-after a long gap, the next observation chimes once for the whole accumulated
-drift.
+unparseable page and reports both the same way: one warning at the start of the
+outage, then silence until a poll succeeds. Because a new broadcast has a
+different stream id, it re-baselines silently instead of chiming against the old
+count. One caveat of keeping the last count on any outage: if the *same* stream
+returns after a long gap, the next observation chimes once for the whole
+accumulated drift.
 
 ## Development
 

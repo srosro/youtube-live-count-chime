@@ -1,10 +1,13 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from youtube_live_count_chime.models import (
     Platform,
+    SourceFetchError,
     StreamSnapshot,
     StreamTarget,
     normalize_handle,
+    poll_snapshots,
 )
 
 
@@ -48,6 +51,47 @@ class StreamSnapshotTests(unittest.TestCase):
                 ValueError
             ):
                 StreamSnapshot(self.target, stream_id, viewers)
+
+
+class PollSnapshotsTests(unittest.IsolatedAsyncioTestCase):
+    target = StreamTarget(Platform.YOUTUBE, "a")
+
+    async def test_warns_once_per_outage_and_rearms_after_a_success(self) -> None:
+        # Three consecutive failures are one outage, so they warn once; the
+        # success in between re-arms, so the second outage warns again.
+        live = StreamSnapshot(self.target, "vid", 7)
+        outcomes: list[StreamSnapshot | SourceFetchError] = [
+            SourceFetchError("first down"),
+            SourceFetchError("still down"),
+            SourceFetchError("still down"),
+            live,
+            SourceFetchError("down again"),
+            live,
+        ]
+        script = iter(outcomes)
+
+        def fetch() -> StreamSnapshot:
+            outcome = next(script, None)
+            if outcome is None:
+                self.fail("poll_snapshots polled more times than the script allows")
+            if isinstance(outcome, SourceFetchError):
+                raise outcome
+            return outcome
+
+        with (
+            patch("youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock),
+            self.assertLogs("youtube_live_count_chime", "WARNING") as logs,
+        ):
+            seen: list[StreamSnapshot] = []
+            async for snapshot in poll_snapshots("youtube:a", fetch):
+                seen.append(snapshot)
+                if len(seen) == 2:  # both successes, so both outages are behind us
+                    break
+
+        warnings = [record.getMessage() for record in logs.records]
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("could not fetch youtube:a: first down", warnings[0])
+        self.assertIn("could not fetch youtube:a: down again", warnings[1])
 
 
 if __name__ == "__main__":

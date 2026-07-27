@@ -10,7 +10,7 @@ from unittest.mock import patch
 from youtube_live_count_chime.cli import build_sources, main, parse_config
 from youtube_live_count_chime.monitor import ChimeConfig
 from youtube_live_count_chime.models import StreamSource
-from youtube_live_count_chime.twitch import TwitchError, TwitchSource
+from youtube_live_count_chime.twitch import TwitchAuthError, TwitchSource
 
 
 class _CliTestCase(unittest.TestCase):
@@ -101,7 +101,7 @@ class BuildSourcesTests(_CliTestCase):
 
     def test_twitch_without_creds_raises_named_error(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(TwitchError):
+            with self.assertRaises(TwitchAuthError):
                 build_sources(parse_config(self.argv("-t", "shroud")))
 
     def test_twitch_with_creds_builds_a_twitch_source(self) -> None:
