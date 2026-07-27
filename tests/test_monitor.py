@@ -144,7 +144,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         a = StreamTarget(Platform.TWITCH, "chan")
         events: list[str] = []
 
-        class SlowNamer:
+        class RecordingNamer:
             async def arrivals(
                 self, target: StreamTarget, stream_id: str
             ) -> tuple[str, ...]:
@@ -156,7 +156,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             ChimeConfig(UP, DOWN),
             play=lambda path: events.append("chime"),
             notify=lambda title, body: events.append("notify"),
-            namer=SlowNamer(),
+            namer=RecordingNamer(),
         )
 
         self.assertEqual(events, ["chime", "arrivals", "notify"])

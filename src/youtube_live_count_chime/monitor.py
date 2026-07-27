@@ -38,10 +38,11 @@ async def monitor(
 
     A rise also posts a macOS notification naming the arrival when the chat
     roster reveals it. The roster of current counts is shared across consumers
-    so every notification carries the same fixed-shape digest. Naming,
-    playback, and notification failures are each warned and skipped so one
-    channel's glitch never stops the watcher: an unnamed notification still
-    posts, and a failed notification still chimes.
+    so every notification carries the same fixed-shape digest. The chime
+    fires first and unconditionally, ahead of both network calls, so a
+    failed name or a failed banner costs neither the chime nor the other
+    channels. Naming, playback, and notification failures are each warned
+    and skipped so one channel's glitch never stops the watcher.
     """
     chime_lock = asyncio.Lock()
     roster = Roster(tuple(source.name for source in sources))
