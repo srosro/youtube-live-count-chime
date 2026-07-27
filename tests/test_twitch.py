@@ -222,7 +222,7 @@ class TwitchClientTests(unittest.TestCase):
                 self.assertIn(str(status), str(ctx.exception))
 
     def test_streams_retry_after_401_classifies_by_status(self) -> None:
-        # Both branches of the post-refresh retry. A 401 that survives a fresh
+        # Both branches of the post-refresh retry. A 401 that survives a newer
         # token is a Client-Id mismatch — the mirror of the bug the split
         # exists to fix, so retrying it forever would be silent — while a 500
         # on the retry is the same transient outage as on the first call.
