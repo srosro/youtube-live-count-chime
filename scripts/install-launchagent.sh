@@ -18,24 +18,24 @@ set -euo pipefail
 [ "$(uname)" = "Darwin" ] || { echo "launchd is macOS-only." >&2; exit 1; }
 
 # Pull --env-file out of the arguments; everything else is a watcher flag.
+usage() { echo "usage: $0 [--env-file PATH] <channel flags, e.g. -y @handle -t login>"; }
 src_env=""
 watch_args=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        -h | --help | --h*) usage; exit 0 ;;
+        # --check and any argparse abbreviation of it make the watcher exit
+        # without running — baked into the agent they would respawn-loop under
+        # KeepAlive. (--check is the only --c* watcher flag; --help the only --h*.)
+        --check | --c*)
+            echo "$1 makes the watcher exit without watching — omit it" >&2; exit 2 ;;
         --env-file) [ "$#" -ge 2 ] || { echo "--env-file needs a path" >&2; exit 2; }
             src_env="$2"; shift 2 ;;
         --env-file=*) src_env="${1#--env-file=}"; shift ;;
-        # Flags that make the watcher exit without running would just
-        # respawn-loop under KeepAlive if baked into the agent's command.
-        --check | -h | --help)
-            echo "$1 is not a channel flag for the agent" >&2; exit 2 ;;
         *) watch_args+=("$1"); shift ;;
     esac
 done
-[ "${#watch_args[@]}" -gt 0 ] || {
-    echo "usage: $0 [--env-file PATH] <channel flags, e.g. -y @handle -t login>" >&2
-    exit 2
-}
+[ "${#watch_args[@]}" -gt 0 ] || { usage >&2; exit 2; }
 set -- "${watch_args[@]}"
 
 bin="$(command -v youtube-live-count-chime || true)"
@@ -69,18 +69,23 @@ fi
 # flag, a bad handle, or missing/empty Twitch credentials all fail here.
 # (It cannot check that credentials actually authenticate or that a handle is
 # live — those surface as a logged warning at runtime.) The subshell mirrors
-# the agent's runtime environment: cd / (launchd's cwd, so a relative sound
-# path is caught) and the two vars unset before sourcing the candidate file
-# (so the installing shell's exported credentials can't mask an empty file).
+# the agent's runtime environment: cd to the WorkingDirectory the plist sets
+# below (so a relative sound path validates the same way it will resolve at
+# runtime) and the two vars unset before sourcing the candidate file (so the
+# installing shell's exported credentials can't mask an empty file).
 candidate_env="${src_env:-$env_file}"
 ( set +e
-    cd /
+    cd "$HOME"
     unset TWITCH_CLIENT_ID TWITCH_CLIENT_SECRET
     set -a
     [ -r "$candidate_env" ] && source "$candidate_env"
     set +a
     "$bin" --check "$@" >/dev/null ) || {
     echo "Configuration is invalid — nothing was changed (see the error above)." >&2
+    if [ -z "$src_env" ] && printf '%s\n' "$@" | grep -qE '^(-t|--t)'; then
+        echo "For Twitch, pass --env-file with a file exporting your credentials" >&2
+        echo "(launchd does not see variables you export in this shell)." >&2
+    fi
     exit 1
 }
 
@@ -117,6 +122,7 @@ cat >"$plist_tmp" <<PLIST
     <key>Label</key><string>$label</string>
     <key>ProgramArguments</key>
     <array><string>/bin/bash</string><string>$wrapper</string></array>
+    <key>WorkingDirectory</key><string>$HOME</string>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>30</integer>
