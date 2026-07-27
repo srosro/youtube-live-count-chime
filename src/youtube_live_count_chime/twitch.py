@@ -50,8 +50,9 @@ class TwitchAuthError(TwitchError):
     """Raised when the credentials are missing or Twitch refuses them.
 
     Either way no poll can ever succeed, so this is deliberately *not* a
-    ``SourceFetchError``. Missing credentials are caught during startup by
-    ``cli.build_sources``, which exits 2 with a clean message. Credentials
+    ``SourceFetchError``. Missing credentials are raised during
+    ``cli.build_sources`` and caught by ``cli.main``, which exits 2 with a
+    clean message before any poll loop exists. Credentials
     Twitch rejects surface later, from the poll loop, where being swallowed
     would hammer the token endpoint behind a log that looks healthy — so they
     tear the watcher down with a traceback instead. Under the launch agent
