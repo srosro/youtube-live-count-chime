@@ -136,6 +136,31 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NotificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_chime_plays_before_naming_and_notifying(self) -> None:
+        # The chime is the pre-existing signal and owes nothing to the
+        # network. Naming costs a chat-roster round trip and the banner an
+        # osascript call (bounded at 10s), so ordering either before the
+        # chime delays every chime behind I/O.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        events: list[str] = []
+
+        class SlowNamer:
+            async def arrivals(
+                self, target: StreamTarget, stream_id: str
+            ) -> tuple[str, ...]:
+                events.append("arrivals")
+                return ("joe_doe",)
+
+        await monitor(
+            [FakeSource("twitch:chan", [live(a, 1), live(a, 2)])],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: events.append("chime"),
+            notify=lambda title, body: events.append("notify"),
+            namer=SlowNamer(),
+        )
+
+        self.assertEqual(events, ["chime", "arrivals", "notify"])
+
     async def test_rise_notifies_with_named_arrival_and_own_current_count(self) -> None:
         a = StreamTarget(Platform.TWITCH, "watchmepivot")
         b = StreamTarget(Platform.YOUTUBE, "srosrosr")

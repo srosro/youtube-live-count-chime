@@ -69,6 +69,17 @@ async def monitor(
                         f"({direction})",
                         flush=True,
                     )
+                    # Chime first: it is the pre-existing signal and owes
+                    # nothing to the network. Naming costs a chat-roster
+                    # round trip and the banner costs an osascript call, so
+                    # doing either first would delay every chime behind I/O.
+                    async with chime_lock:
+                        try:
+                            await asyncio.to_thread(play, sound)
+                        except SoundPlaybackError as error:
+                            _LOGGER.warning(
+                                "could not play chime for %s: %s", source.name, error
+                            )
                     if rising:
                         delta = snapshot.viewers - previous.viewers
                         names: tuple[str, ...] = ()
@@ -92,13 +103,6 @@ async def monitor(
                         except NotificationError as error:
                             _LOGGER.warning(
                                 "could not notify for %s: %s", source.name, error
-                            )
-                    async with chime_lock:
-                        try:
-                            await asyncio.to_thread(play, sound)
-                        except SoundPlaybackError as error:
-                            _LOGGER.warning(
-                                "could not play chime for %s: %s", source.name, error
                             )
                 previous = snapshot
         except Exception as error:
