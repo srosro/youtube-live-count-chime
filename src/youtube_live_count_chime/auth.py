@@ -153,19 +153,29 @@ class _CallbackHandler(BaseHTTPRequestHandler):
     """Capture one OAuth callback, then let the server shut down."""
 
     path_seen: str | None = None
+    # The state run_auth_flow generated for the flow in progress; ``None``
+    # between flows, when nothing can be the callback.
+    expected_state: str | None = None
     # Bounds a single accepted-but-silent connection (e.g. a browser
     # preconnect that never sends a request line) so it cannot block forever
     # regardless of the overall flow deadline.
     timeout = _SOCKET_TIMEOUT_SECONDS
 
     def do_GET(self) -> None:
-        # Only a request carrying a code or error is the real OAuth callback.
-        # A stray GET (a preconnect that did send a request line, a favicon
-        # probe, any other poke at the port) gets a neutral reply and must
-        # not be mistaken for the callback, or the wait loop below ends on
-        # it and parse_callback then fails on a state mismatch.
+        # Only a request carrying this flow's own state *and* a code or error
+        # is the real OAuth callback. Anything else — a preconnect that did
+        # send a request line, a favicon probe, or any other local process
+        # poking the port with ?error=x — gets a neutral reply and must not be
+        # mistaken for the callback: the wait loop below would end on it and
+        # the real callback would never be read. Checking the state here and
+        # not only in parse_callback is what keeps that unforgeable.
         query = parse_qs(urlparse(self.path).query)
-        is_callback = "code" in query or "error" in query
+        expected = type(self).expected_state
+        is_callback = (
+            expected is not None
+            and query.get("state", [""])[0] == expected
+            and ("code" in query or "error" in query)
+        )
         if is_callback:
             type(self).path_seen = self.path
         self.send_response(200)
@@ -193,6 +203,7 @@ def run_auth_flow(
     login = normalize_handle(login)
     state = secrets.token_urlsafe(24)
     _CallbackHandler.path_seen = None
+    _CallbackHandler.expected_state = state
     url = authorize_url(credentials.client_id, state)
     print(f"Opening browser to authorize {login} …", flush=True)
     print(f"If it does not open, visit:\n  {url}", flush=True)
@@ -208,9 +219,10 @@ def run_auth_flow(
     with server:
         deadline = time.monotonic() + _FLOW_TIMEOUT_SECONDS
         # do_GET only records path_seen for a request that actually carries
-        # the callback (a code or error), so a stray request — a preconnect
-        # that did send a request line, a favicon probe, any other poke at
-        # the port — is tolerated and does not end this loop. A connection
+        # this flow's state and the callback (a code or error), so a stray
+        # request — a preconnect that did send a request line, a favicon
+        # probe, another local process hitting the port with ?error=x — is
+        # tolerated and does not end this loop. A connection
         # that never sends a request line at all (e.g. a bare TCP
         # preconnect) is also tolerated, just silently rather than with a
         # reply. Keep accepting requests until we see the real callback or

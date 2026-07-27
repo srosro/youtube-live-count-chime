@@ -237,6 +237,19 @@ class RunAuthFlowTests(unittest.TestCase):
         self.assertEqual(token.login, "watchmepivot")
         self.assertEqual(len(server.timeouts), 2)
 
+    def test_a_foreign_callback_does_not_end_the_wait(self) -> None:
+        # Any local process can hit the loopback port. A request carrying a
+        # code or error but not this flow's state must be treated like any
+        # other stray request, or that process could abort every authorization
+        # attempt: the loop would end on it and the real callback, arriving
+        # after, would never be read.
+        server = _FakeCallbackServer("/?error=access_denied&state=attacker", CALLBACK)
+
+        token = self._run_flow(server)
+
+        self.assertEqual(token.login, "watchmepivot")
+        self.assertEqual(len(server.timeouts), 2)
+
     def test_the_overall_budget_bounds_the_wait_and_shrinks_per_attempt(self) -> None:
         # Without a deadline a browser that never returns hangs the terminal
         # forever, and each attempt gets only what is left of the budget.
