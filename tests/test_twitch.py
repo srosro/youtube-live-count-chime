@@ -229,7 +229,7 @@ class TwitchClientTests(unittest.TestCase):
         cases = (
             # The fatal branch's message is all an operator gets from the
             # crash log; the retryable one must carry the status to act on.
-            (401, TwitchAuthError, "rejected a fresh token"),
+            (401, TwitchAuthError, "rejected a refreshed token"),
             (500, TwitchRequestError, "500"),
         )
         for status, expected, message in cases:

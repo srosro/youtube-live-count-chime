@@ -215,12 +215,13 @@ class TwitchClient:
             return self._get_streams(self._refresh_token(generation), target)
         except HTTPError as error:
             if error.code == 401:
-                # A token streams rejects right after a refresh is a
-                # Client-Id/token mismatch, not expiry — retrying never helps.
-                # (The dedup in _refresh_token may hand back another thread's
-                # token rather than minting one, but either way it is newer
-                # than the token that just 401'd.)
-                raise TwitchAuthError("Twitch streams rejected a fresh token") from error
+                # _refresh_token returns a token newer than the one that just
+                # 401'd (minted here or by a concurrent refresh), so a second
+                # 401 is a Client-Id/token mismatch, not expiry — retrying
+                # never helps.
+                raise TwitchAuthError(
+                    "Twitch streams rejected a refreshed token"
+                ) from error
             raise self._streams_error(error) from error
 
 
