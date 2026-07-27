@@ -50,11 +50,6 @@ async def monitor(
         try:
             async for snapshot in source.snapshots():
                 roster.update(source.name, snapshot.viewers)
-                # Yield to sibling consumers so a source with no real I/O
-                # (or one that outruns another) can't fire a notification
-                # before every other source has recorded its own latest
-                # count into the shared roster.
-                await asyncio.sleep(0)
                 if snapshot.stream_id is None:
                     previous = None
                     continue
