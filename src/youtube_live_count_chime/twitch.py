@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from http.client import HTTPException
 import json
 from json import JSONDecodeError
-import logging
 import os
 import threading
 from typing import Final, Self, cast
@@ -17,11 +15,12 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from youtube_live_count_chime.models import (
-    POLL_INTERVAL_SECONDS,
     Platform,
+    SourceFetchError,
     StreamSnapshot,
     StreamTarget,
     normalize_handle,
+    poll_snapshots,
 )
 
 
@@ -29,10 +28,9 @@ TOKEN_URL: Final = "https://id.twitch.tv/oauth2/token"
 STREAMS_URL: Final = "https://api.twitch.tv/helix/streams"
 _CLIENT_ID_ENV: Final = "TWITCH_CLIENT_ID"
 _CLIENT_SECRET_ENV: Final = "TWITCH_CLIENT_SECRET"
-_LOGGER: Final = logging.getLogger(__name__)
 
 
-class TwitchError(RuntimeError):
+class TwitchError(SourceFetchError):
     """Raised when a Twitch credential or response cannot be used."""
 
 
@@ -202,13 +200,6 @@ class TwitchSource:
         target = StreamTarget(Platform.TWITCH, normalize_handle(login))
         return cls(name=target.key, target=target, client=client)
 
-    async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield live/offline snapshots, retrying request failures after each poll."""
-        while True:
-            try:
-                snapshot = await asyncio.to_thread(self.client.stream, self.target)
-            except TwitchError as error:
-                _LOGGER.warning("could not fetch Twitch stream for %s: %s", self.name, error)
-            else:
-                yield snapshot
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        return poll_snapshots(self.name, lambda: self.client.stream(self.target))

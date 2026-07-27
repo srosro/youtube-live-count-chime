@@ -186,12 +186,12 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=[ViewerCountError("boom"), page],
             ) as fetcher,
             patch(
-                "youtube_live_count_chime.youtube.asyncio.sleep", new_callable=AsyncMock
+                "youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock
             ),
         ):
             source = YouTubeSource.for_handle("@x")
 
-            with self.assertLogs("youtube_live_count_chime.youtube", "WARNING"):
+            with self.assertLogs("youtube_live_count_chime", "WARNING"):
                 snapshot = await anext(source.snapshots())
 
         self.assertEqual(fetcher.call_count, 2)

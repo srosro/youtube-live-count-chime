@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from enum import StrEnum
+import logging
 import re
 from typing import Final, Protocol, Self
 
@@ -18,6 +20,12 @@ _HANDLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9._-]{1,30}")
 # Seconds between polls of each channel — the single source of truth for both
 # sources' cadence.
 POLL_INTERVAL_SECONDS: Final = 5.0
+
+_LOGGER: Final = logging.getLogger(__name__)
+
+
+class SourceFetchError(RuntimeError):
+    """Raised when a source cannot produce a snapshot for one poll."""
 
 
 class Platform(StrEnum):
@@ -85,3 +93,26 @@ class StreamSource(Protocol):
 
     def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield successive stream snapshots."""
+
+
+async def poll_snapshots(
+    name: str, fetch: Callable[[], StreamSnapshot]
+) -> AsyncIterator[StreamSnapshot]:
+    """Poll ``fetch`` forever, yielding snapshots and surviving fetch failures.
+
+    An unreachable channel fails every poll, so warn only on the transition
+    *into* failure; a successful poll re-arms it for the next distinct outage.
+    """
+    warned = False
+    while True:
+        try:
+            snapshot = await asyncio.to_thread(fetch)
+        except SourceFetchError as error:
+            if not warned:
+                # `name` already carries the platform, e.g. "youtube:mkbhd".
+                _LOGGER.warning("could not fetch %s: %s", name, error)
+                warned = True
+        else:
+            warned = False
+            yield snapshot
+        await asyncio.sleep(POLL_INTERVAL_SECONDS)

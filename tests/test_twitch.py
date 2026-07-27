@@ -225,7 +225,7 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=lambda target: parse_stream(next(payloads), target),
             ),
             patch(
-                "youtube_live_count_chime.twitch.asyncio.sleep", new_callable=AsyncMock
+                "youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock
             ),
         ):
             seen = []

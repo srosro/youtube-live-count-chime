@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from html import unescape
 from http.client import HTTPException
 from json import JSONDecodeError, JSONDecoder
-import logging
 import re
 from typing import Final, Self, cast
 from urllib.request import Request, urlopen
 
 from youtube_live_count_chime.models import (
-    POLL_INTERVAL_SECONDS,
     Platform,
+    SourceFetchError,
     StreamSnapshot,
     StreamTarget,
     normalize_handle,
+    poll_snapshots,
 )
 
 
@@ -40,10 +39,9 @@ _VIDEO_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:[?&]v=)(?P<video_id>[A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])"
 )
 _JSON_DECODER: Final = JSONDecoder()
-_LOGGER: Final = logging.getLogger(__name__)
 
 
-class ViewerCountError(RuntimeError):
+class ViewerCountError(SourceFetchError):
     """Raised when a valid live viewer count cannot be obtained."""
 
 
@@ -131,17 +129,15 @@ class YouTubeSource:
             url=f"https://www.youtube.com/@{normalized_handle}/live",
         )
 
-    async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    def _snapshot(self) -> StreamSnapshot:
+        """Fetch the channel's live page as a snapshot."""
+        page = fetch_live_page(self.url)
+        return StreamSnapshot(
+            target=self.target,
+            stream_id=page.video_id,
+            viewers=page.viewers,
+        )
+
+    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield live snapshots, retrying page-fetch failures after each poll."""
-        while True:
-            try:
-                page = await asyncio.to_thread(fetch_live_page, self.url)
-            except ViewerCountError as error:
-                _LOGGER.warning("could not fetch YouTube live page for %s: %s", self.name, error)
-            else:
-                yield StreamSnapshot(
-                    target=self.target,
-                    stream_id=page.video_id,
-                    viewers=page.viewers,
-                )
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        return poll_snapshots(self.name, self._snapshot)
