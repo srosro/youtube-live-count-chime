@@ -28,14 +28,19 @@ TOKEN_URL: Final = "https://id.twitch.tv/oauth2/token"
 STREAMS_URL: Final = "https://api.twitch.tv/helix/streams"
 _CLIENT_ID_ENV: Final = "TWITCH_CLIENT_ID"
 _CLIENT_SECRET_ENV: Final = "TWITCH_CLIENT_SECRET"
+# Token-endpoint statuses that mean the credentials themselves are refused.
+# Everything else it returns (429 rate limits, 5xx degradation) is transient.
+_CREDENTIAL_REJECTED_STATUSES: Final = frozenset({400, 401, 403})
 
 
 class TwitchError(RuntimeError):
-    """Raised when a Twitch credential or response cannot be used.
+    """Raised when a Twitch credential is rejected outright.
 
     Deliberately *not* a ``SourceFetchError``: rejected credentials fail every
     poll forever, so letting the poll loop swallow them would hammer the token
-    endpoint behind a log that looks healthy. These stop the watcher instead.
+    endpoint behind a log that looks healthy. These tear the watcher down with
+    a traceback instead — under the launch agent that is a throttled respawn
+    loop rather than a true stop, but each attempt says why in the log.
     """
 
 
@@ -79,7 +84,9 @@ def parse_app_token(payload: object) -> str:
     value = _object_dict(payload)
     token = value.get("access_token") if value is not None else None
     if not isinstance(token, str) or not token:
-        raise TwitchError("invalid Twitch token response")
+        # A 200 with an unexpected body is transport-shaped (proxy, captive
+        # portal, partial degradation), not a credential rejection.
+        raise TwitchRequestError("invalid Twitch token response")
     return token
 
 
@@ -144,7 +151,10 @@ class TwitchClient:
         try:
             payload = _get_json(request)
         except HTTPError as error:
-            raise TwitchError(f"Twitch token request failed (HTTP {error.code})") from error
+            message = f"Twitch token request failed (HTTP {error.code})"
+            if error.code in _CREDENTIAL_REJECTED_STATUSES:
+                raise TwitchError(message) from error
+            raise TwitchRequestError(message) from error
         token = parse_app_token(payload)
         self._app_token = token
         self._generation += 1
@@ -178,7 +188,7 @@ class TwitchClient:
         return parse_stream(_get_json(request), target)
 
     @staticmethod
-    def _streams_error(error: HTTPError) -> TwitchError:
+    def _streams_error(error: HTTPError) -> TwitchRequestError:
         return TwitchRequestError(f"Twitch streams request failed (HTTP {error.code})")
 
     def stream(self, target: StreamTarget) -> StreamSnapshot:
@@ -192,6 +202,10 @@ class TwitchClient:
         try:
             return self._get_streams(self._refresh_token(generation), target)
         except HTTPError as error:
+            if error.code == 401:
+                # A freshly minted token that streams still rejects is a
+                # Client-Id/token mismatch, not expiry — retrying never helps.
+                raise TwitchError("Twitch streams rejected a fresh token") from error
             raise self._streams_error(error) from error
 
 
