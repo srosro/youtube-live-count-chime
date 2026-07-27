@@ -14,7 +14,6 @@ from youtube_live_count_chime.twitch import (
     TwitchAuthError,
     TwitchClient,
     TwitchCredentials,
-    TwitchError,
     TwitchRequestError,
     TwitchSource,
     parse_app_token,
@@ -211,12 +210,8 @@ class TwitchClientTests(unittest.TestCase):
             client = TwitchClient(CREDS)
             with self.subTest(status=status):
                 with patch("youtube_live_count_chime.twitch.urlopen", http):
-                    with self.assertRaises(TwitchError) as ctx:
+                    with self.assertRaises(expected) as ctx:
                         client.stream(TARGET)
-                # Exact type, not membership: a raise site reaching for the
-                # base by accident is the mistake the split exists to prevent,
-                # and it would satisfy any isinstance check on the fatal rows.
-                self.assertIs(type(ctx.exception), expected)
                 # The failure names the token endpoint, not streams.
                 self.assertIn("token", str(ctx.exception))
                 self.assertIn(str(status), str(ctx.exception))
@@ -240,9 +235,8 @@ class TwitchClientTests(unittest.TestCase):
             client = TwitchClient(CREDS)
             with self.subTest(status=status):
                 with patch("youtube_live_count_chime.twitch.urlopen", http):
-                    with self.assertRaises(TwitchError) as ctx:
+                    with self.assertRaises(expected) as ctx:
                         client.stream(TARGET)
-                self.assertIs(type(ctx.exception), expected)
                 self.assertIn(message, str(ctx.exception))
                 # Pins that the failure came from the retry, not the first call:
                 # a second token was minted and a second streams call was made.
@@ -294,13 +288,13 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "youtube_live_count_chime.twitch.TwitchClient.stream",
                 side_effect=[TwitchRequestError("Twitch request failed"), live],
-            ) as stream,
+            ),
             patch("youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock),
         ):
             with self.assertLogs("youtube_live_count_chime", "WARNING"):
                 snapshot = await anext(source.snapshots())
 
-        self.assertEqual(stream.call_count, 2)
+        # Yielding the second scripted outcome is the retry: the first raised.
         self.assertEqual(snapshot.viewers, 5)
 
     async def test_rejected_credentials_stop_the_source_instead_of_retrying(self) -> None:

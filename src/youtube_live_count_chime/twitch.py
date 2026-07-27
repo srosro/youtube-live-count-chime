@@ -33,20 +33,11 @@ _CLIENT_SECRET_ENV: Final = "TWITCH_CLIENT_SECRET"
 _CREDENTIAL_REJECTED_STATUSES: Final = frozenset({400, 401, 403})
 
 
-class TwitchError(RuntimeError):
-    """Base for every Twitch failure. Never raised directly — pick a subclass.
-
-    The two subclasses split on one question: can a later poll survive this?
-    Only ``TwitchRequestError`` is a ``SourceFetchError``, so only it is
-    swallowed and retried by the shared poll loop.
-    """
-
-
-class TwitchRequestError(TwitchError, SourceFetchError):
+class TwitchRequestError(SourceFetchError):
     """Raised when one Twitch request fails in a way a later poll may survive."""
 
 
-class TwitchAuthError(TwitchError):
+class TwitchAuthError(RuntimeError):
     """Raised when the credentials are missing or Twitch refuses them.
 
     Either way no poll can ever succeed, so this is deliberately *not* a

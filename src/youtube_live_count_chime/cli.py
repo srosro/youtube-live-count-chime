@@ -13,9 +13,9 @@ from typing import Final, Sequence, cast
 from youtube_live_count_chime.models import StreamSource
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
 from youtube_live_count_chime.twitch import (
+    TwitchAuthError,
     TwitchClient,
     TwitchCredentials,
-    TwitchError,
     TwitchSource,
 )
 from youtube_live_count_chime.youtube import YouTubeSource
@@ -134,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = parse_config(argv)
     try:
         sources = build_sources(config)
-    except (ValueError, TwitchError) as error:
+    except (ValueError, TwitchAuthError) as error:
         print(f"Error: {error}", file=sys.stderr, flush=True)
         return 2
 

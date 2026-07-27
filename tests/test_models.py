@@ -56,10 +56,18 @@ class StreamSnapshotTests(unittest.TestCase):
 class PollSnapshotsTests(unittest.IsolatedAsyncioTestCase):
     target = StreamTarget(Platform.YOUTUBE, "a")
 
-    async def collect(
-        self, outcomes: list[StreamSnapshot | SourceFetchError], wanted: int
-    ) -> list[str]:
-        """Run poll_snapshots over scripted outcomes, returning the warnings logged."""
+    async def test_warns_once_per_outage_and_rearms_after_a_success(self) -> None:
+        # Three consecutive failures are one outage, so they warn once; the
+        # success in between re-arms, so the second outage warns again.
+        live = StreamSnapshot(self.target, "vid", 7)
+        outcomes: list[StreamSnapshot | SourceFetchError] = [
+            SourceFetchError("first down"),
+            SourceFetchError("still down"),
+            SourceFetchError("still down"),
+            live,
+            SourceFetchError("down again"),
+            live,
+        ]
         script = iter(outcomes)
 
         def fetch() -> StreamSnapshot:
@@ -77,26 +85,10 @@ class PollSnapshotsTests(unittest.IsolatedAsyncioTestCase):
             seen: list[StreamSnapshot] = []
             async for snapshot in poll_snapshots("youtube:a", fetch):
                 seen.append(snapshot)
-                if len(seen) == wanted:
+                if len(seen) == 2:  # both successes, so both outages are behind us
                     break
-        return [record.getMessage() for record in logs.records]
 
-    async def test_warns_once_per_outage_and_rearms_after_a_success(self) -> None:
-        # Three consecutive failures are one outage, so they warn once; the
-        # success in between re-arms, so the second outage warns again.
-        live = StreamSnapshot(self.target, "vid", 7)
-        warnings = await self.collect(
-            [
-                SourceFetchError("first down"),
-                SourceFetchError("still down"),
-                SourceFetchError("still down"),
-                live,
-                SourceFetchError("down again"),
-                live,
-            ],
-            wanted=2,
-        )
-
+        warnings = [record.getMessage() for record in logs.records]
         self.assertEqual(len(warnings), 2)
         self.assertIn("could not fetch youtube:a: first down", warnings[0])
         self.assertIn("could not fetch youtube:a: down again", warnings[1])
