@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 from urllib.error import HTTPError
 from urllib.request import Request
 
-from youtube_live_count_chime.models import Platform, SourceFetchError, StreamTarget
+from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.twitch import (
     TwitchAuthError,
     TwitchClient,
@@ -198,15 +198,25 @@ class TwitchClientTests(unittest.TestCase):
         # 400/401/403 mean the credentials are refused, so the poll loop must
         # not swallow them; 429/5xx are the endpoint busy or degraded, which a
         # later poll may survive.
-        cases = {400: False, 401: False, 403: False, 429: True, 500: True, 503: True}
-        for status, retryable in cases.items():
+        cases = {
+            400: TwitchAuthError,
+            401: TwitchAuthError,
+            403: TwitchAuthError,
+            429: TwitchRequestError,
+            500: TwitchRequestError,
+            503: TwitchRequestError,
+        }
+        for status, expected in cases.items():
             http = _FakeHttp(token=[_http_error(status)], streams=[])
             client = TwitchClient(CREDS)
             with self.subTest(status=status):
                 with patch("youtube_live_count_chime.twitch.urlopen", http):
                     with self.assertRaises(TwitchError) as ctx:
                         client.stream(TARGET)
-                self.assertEqual(isinstance(ctx.exception, SourceFetchError), retryable)
+                # Exact type, not membership: a raise site reaching for the
+                # base by accident is the mistake the split exists to prevent,
+                # and it would satisfy any isinstance check on the fatal rows.
+                self.assertIs(type(ctx.exception), expected)
                 # The failure names the token endpoint, not streams.
                 self.assertIn("token", str(ctx.exception))
                 self.assertIn(str(status), str(ctx.exception))
@@ -216,7 +226,11 @@ class TwitchClientTests(unittest.TestCase):
         # token is a Client-Id mismatch — the mirror of the bug the split
         # exists to fix, so retrying it forever would be silent — while a 500
         # on the retry is the same transient outage as on the first call.
-        for status, retryable in ((401, False), (500, True)):
+        cases = (
+            (401, TwitchAuthError, "rejected a fresh token"),
+            (500, TwitchRequestError, "streams"),
+        )
+        for status, expected, message in cases:
             http = _FakeHttp(
                 token=[{"access_token": "old"}, {"access_token": "new"}],
                 streams=[_http_error(401), _http_error(status)],
@@ -226,7 +240,9 @@ class TwitchClientTests(unittest.TestCase):
                 with patch("youtube_live_count_chime.twitch.urlopen", http):
                     with self.assertRaises(TwitchError) as ctx:
                         client.stream(TARGET)
-                self.assertEqual(isinstance(ctx.exception, SourceFetchError), retryable)
+                self.assertIs(type(ctx.exception), expected)
+                # The crash log is all an operator gets on the fatal branch.
+                self.assertIn(message, str(ctx.exception))
                 # Pins that the failure came from the retry, not the first call:
                 # a second token was minted and a second streams call was made.
                 self.assertEqual((http.token_calls, http.streams_calls), (2, 2))
