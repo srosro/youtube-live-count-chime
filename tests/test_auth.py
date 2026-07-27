@@ -1,3 +1,4 @@
+from contextlib import redirect_stdout
 import io
 from pathlib import Path
 import tempfile
@@ -237,18 +238,39 @@ class RunAuthFlowTests(unittest.TestCase):
         self.assertEqual(token.login, "watchmepivot")
         self.assertEqual(len(server.timeouts), 2)
 
-    def test_a_foreign_callback_does_not_end_the_wait(self) -> None:
+    def test_a_foreign_callback_does_not_end_the_wait_but_is_reported_once(self) -> None:
         # Any local process can hit the loopback port. A request carrying a
         # code or error but not this flow's state must be treated like any
         # other stray request, or that process could abort every authorization
         # attempt: the loop would end on it and the real callback, arriving
-        # after, would never be read.
-        server = _FakeCallbackServer("/?error=access_denied&state=attacker", CALLBACK)
+        # after, would never be read. But the everyday cause is a stale
+        # consent tab from an earlier --auth that the browser reloaded, so the
+        # user gets one line about it rather than a silent five-minute hang.
+        server = _FakeCallbackServer(
+            "/?error=access_denied&state=attacker",
+            "/?code=abc123&state=stale-tab",
+            CALLBACK,
+        )
+        out = io.StringIO()
 
-        token = self._run_flow(server)
+        with redirect_stdout(out):
+            token = self._run_flow(server)
 
         self.assertEqual(token.login, "watchmepivot")
-        self.assertEqual(len(server.timeouts), 2)
+        self.assertEqual(len(server.timeouts), 3)
+        self.assertEqual(out.getvalue().count("Ignoring an authorization callback"), 1)
+        self.assertIn("stale authorization tab", out.getvalue())
+        # Never echo anyone's state, ours or theirs.
+        self.assertNotIn("attacker", out.getvalue())
+        self.assertNotIn("stale-tab", out.getvalue())
+
+    def test_no_request_can_be_the_callback_once_the_flow_is_over(self) -> None:
+        # Between flows there is no state to match, so a late (or replayed)
+        # request must not be recorded as a callback the next flow would then
+        # pick up as its own.
+        self._run_flow(_FakeCallbackServer(CALLBACK))
+
+        self.assertIsNone(_CallbackHandler.expected_state)
 
     def test_the_overall_budget_bounds_the_wait_and_shrinks_per_attempt(self) -> None:
         # Without a deadline a browser that never returns hangs the terminal
