@@ -85,3 +85,10 @@ class StreamSource(Protocol):
 
     def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield successive stream snapshots."""
+
+
+class ArrivalNamer(Protocol):
+    """Names viewers who appeared on a target since the previous query."""
+
+    async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
+        """Return handles that arrived, or ``()`` when none are knowable."""

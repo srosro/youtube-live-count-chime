@@ -94,7 +94,7 @@ def parse_stream(payload: object, target: StreamTarget) -> StreamSnapshot:
     return StreamSnapshot(target, stream_id, viewers)
 
 
-def _get_json(request: Request) -> object:
+def get_json(request: Request) -> object:
     try:
         with urlopen(request, timeout=10.0) as response:
             return cast(object, json.loads(cast(bytes, response.read())))
@@ -135,7 +135,7 @@ class TwitchClient:
             method="POST",
         )
         try:
-            payload = _get_json(request)
+            payload = get_json(request)
         except HTTPError as error:
             raise TwitchError(f"Twitch token request failed (HTTP {error.code})") from error
         token = parse_app_token(payload)
@@ -168,7 +168,7 @@ class TwitchClient:
             },
             method="GET",
         )
-        return parse_stream(_get_json(request), target)
+        return parse_stream(get_json(request), target)
 
     @staticmethod
     def _streams_error(error: HTTPError) -> TwitchError:
