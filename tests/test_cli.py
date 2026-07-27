@@ -196,20 +196,20 @@ class MainTests(_CliTestCase):
         self.assertEqual(captured["config"].down_sound.name, "down.aiff")
 
 
-class AuthFlagTests(unittest.TestCase):
+class AuthFlagTests(_CliTestCase):
     def test_auth_flag_parses_a_login(self) -> None:
-        config = parse_config(["--auth", "watchmepivot"])
+        config = parse_config(self.argv("--auth", "watchmepivot"))
 
         self.assertEqual(config.auth, "watchmepivot")
 
     def test_auth_defaults_to_none(self) -> None:
-        config = parse_config(["-t", "shroud"])
+        config = parse_config(self.argv("-t", "shroud"))
 
         self.assertIsNone(config.auth)
 
     def test_auth_does_not_require_a_channel(self) -> None:
         # Authorizing is a setup step; it runs before any channel is configured.
-        config = parse_config(["--auth", "watchmepivot"])
+        config = parse_config(self.argv("--auth", "watchmepivot"))
 
         self.assertEqual(config.youtube, ())
         self.assertEqual(config.twitch, ())
@@ -230,7 +230,7 @@ class AuthFlagTests(unittest.TestCase):
             patch.dict(os.environ, env, clear=True),
             patch("youtube_live_count_chime.cli.run_auth_flow", fake_run_auth_flow),
         ):
-            exit_code = main(["--auth", "watchmepivot"])
+            exit_code = main(self.argv("--auth", "watchmepivot"))
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(captured["login"], "watchmepivot")
@@ -248,7 +248,7 @@ class AuthFlagTests(unittest.TestCase):
             patch("youtube_live_count_chime.cli.run_auth_flow", fake_run_auth_flow),
             redirect_stderr(stderr),
         ):
-            exit_code = main(["--auth", "watchmepivot"])
+            exit_code = main(self.argv("--auth", "watchmepivot"))
 
         self.assertEqual(exit_code, 2)
         self.assertIn("Error: authorization was refused", stderr.getvalue())
@@ -262,7 +262,7 @@ class AuthFlagTests(unittest.TestCase):
         env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
         stderr = StringIO()
         with patch.dict(os.environ, env, clear=True), redirect_stderr(stderr):
-            exit_code = main(["--auth", "bad login!"])
+            exit_code = main(self.argv("--auth", "bad login!"))
 
         self.assertEqual(exit_code, 2)
         self.assertTrue(stderr.getvalue().startswith("Error: "))

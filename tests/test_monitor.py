@@ -38,6 +38,14 @@ def live(target: StreamTarget, viewers: int) -> StreamSnapshot:
     return StreamSnapshot(target, "s1", viewers)
 
 
+def silent(title: str, body: str) -> None:
+    """Swallow notifications in tests that assert only on chime behavior.
+
+    monitor() defaults to the real osascript notifier, so a rise in a test
+    that does not inject one posts an actual banner (and fails off macOS).
+    """
+
+
 class MonitorTests(unittest.IsolatedAsyncioTestCase):
     async def test_chimes_up_and_down_but_not_on_baseline_or_no_change(self) -> None:
         target = StreamTarget(Platform.YOUTUBE, "a")
@@ -47,6 +55,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             [FakeSource("youtube:a", snaps)],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            notify=silent,
         )
         self.assertEqual(played, [UP, DOWN])  # 5->5 silent, 5->9 up, 9->2 down
 
@@ -61,6 +70,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             ],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            notify=silent,
         )
         self.assertEqual(played, [UP])  # a 1->2 up; b unchanged; baselines silent
 
@@ -72,6 +82,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 [FakeSource("youtube:chan", [live(a, 5), live(a, 9)])],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
+                notify=silent,
             )
         # Pins previous->current order and the up/down word (a swap would show
         # "9 -> 5" or "(down)").
@@ -95,6 +106,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             ],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            notify=silent,
         )
         # Every reset step is silent, and chiming resumes on the next real delta.
         self.assertEqual(played, [UP])
@@ -113,6 +125,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 [FakeSource("youtube:a", [live(a, 1), live(a, 2), live(a, 3)])],
                 ChimeConfig(UP, DOWN),
                 play=boom,
+                notify=lambda title, body: None,
             )
         self.assertEqual(len(logs.records), 2)
 
@@ -126,6 +139,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
+                notify=silent,
             )
         # Pin the full wrapper message and the preserved cause: this fails if
         # the naming wrapper or its `from error` chaining is dropped.
