@@ -68,10 +68,11 @@ class TokenStore:
         tokens[token.login] = token
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Create with 0600 before writing so the secret is never briefly
-        # world-readable.
+        # world-readable. Use fchmod on the descriptor itself to ensure the mode
+        # is set before writing, regardless of whether the file already exists.
         descriptor = os.open(
             self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
         )
+        os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump({k: asdict(v) for k, v in tokens.items()}, handle, indent=2)
-        self.path.chmod(0o600)

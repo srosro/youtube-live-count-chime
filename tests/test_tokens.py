@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 import stat
 import tempfile
@@ -58,6 +57,19 @@ class TokenStoreTests(unittest.TestCase):
 
         with self.assertRaises(TokenStoreError):
             TokenStore(self.path).get("watchmepivot")
+
+    def test_existing_loose_file_is_tightened_before_writing(self) -> None:
+        # Regression test: if tokens.json exists at 0644 (e.g., from an older
+        # version), save() must narrow the mode to 0600 BEFORE writing secrets,
+        # not after. Otherwise the secrets are briefly world-readable.
+        self.path.write_text("{}", encoding="utf-8")
+        self.path.chmod(0o644)
+
+        store = TokenStore(self.path)
+        store.save(_token("watchmepivot"))
+
+        mode = stat.S_IMODE(self.path.stat().st_mode)
+        self.assertEqual(mode, 0o600)
 
 
 if __name__ == "__main__":
