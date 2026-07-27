@@ -68,7 +68,9 @@ fi
 # runs the same parse_config/build_sources the watcher uses, so a malformed
 # flag, a bad handle, or missing/empty Twitch credentials all fail here.
 # (It cannot check that credentials actually authenticate or that a handle is
-# live — those surface as a logged warning at runtime.) The subshell mirrors
+# live. An offline handle just warns at runtime; credentials the token endpoint
+# refuses exit the watcher, which KeepAlive turns into a 30s respawn loop that
+# logs the reason each time.) The subshell mirrors
 # the agent's runtime environment: cd to the WorkingDirectory the plist sets
 # below (so a relative sound path validates the same way it will resolve at
 # runtime) and the two vars unset before sourcing the candidate file (so the
