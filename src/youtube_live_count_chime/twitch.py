@@ -34,7 +34,20 @@ _CREDENTIAL_REJECTED_STATUSES: Final = frozenset({400, 401, 403})
 
 
 class TwitchError(RuntimeError):
-    """Raised when a Twitch credential is rejected outright.
+    """Base for every Twitch failure. Never raised directly — pick a subclass.
+
+    The two subclasses split on one question: can a later poll survive this?
+    Only ``TwitchRequestError`` is a ``SourceFetchError``, so only it is
+    swallowed and retried by the shared poll loop.
+    """
+
+
+class TwitchRequestError(TwitchError, SourceFetchError):
+    """Raised when one Twitch request fails in a way a later poll may survive."""
+
+
+class TwitchAuthError(TwitchError):
+    """Raised when Twitch refuses the credentials themselves.
 
     Deliberately *not* a ``SourceFetchError``: rejected credentials fail every
     poll forever, so letting the poll loop swallow them would hammer the token
@@ -42,10 +55,6 @@ class TwitchError(RuntimeError):
     a traceback instead — under the launch agent that is a throttled respawn
     loop rather than a true stop, but each attempt says why in the log.
     """
-
-
-class TwitchRequestError(TwitchError, SourceFetchError):
-    """Raised when one Twitch request fails in a way a later poll may survive."""
 
 
 def _object_dict(value: object) -> dict[str, object] | None:
@@ -73,9 +82,9 @@ class TwitchCredentials:
         client_id = os.environ.get(_CLIENT_ID_ENV, "")
         client_secret = os.environ.get(_CLIENT_SECRET_ENV, "")
         if not client_id:
-            raise TwitchError(f"{_CLIENT_ID_ENV} is not set")
+            raise TwitchAuthError(f"{_CLIENT_ID_ENV} is not set")
         if not client_secret:
-            raise TwitchError(f"{_CLIENT_SECRET_ENV} is not set")
+            raise TwitchAuthError(f"{_CLIENT_SECRET_ENV} is not set")
         return cls(client_id, client_secret)
 
 
@@ -153,7 +162,7 @@ class TwitchClient:
         except HTTPError as error:
             message = f"Twitch token request failed (HTTP {error.code})"
             if error.code in _CREDENTIAL_REJECTED_STATUSES:
-                raise TwitchError(message) from error
+                raise TwitchAuthError(message) from error
             raise TwitchRequestError(message) from error
         token = parse_app_token(payload)
         self._app_token = token
@@ -205,7 +214,7 @@ class TwitchClient:
             if error.code == 401:
                 # A freshly minted token that streams still rejects is a
                 # Client-Id/token mismatch, not expiry — retrying never helps.
-                raise TwitchError("Twitch streams rejected a fresh token") from error
+                raise TwitchAuthError("Twitch streams rejected a fresh token") from error
             raise self._streams_error(error) from error
 
 
