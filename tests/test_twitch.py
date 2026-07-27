@@ -227,8 +227,10 @@ class TwitchClientTests(unittest.TestCase):
         # exists to fix, so retrying it forever would be silent — while a 500
         # on the retry is the same transient outage as on the first call.
         cases = (
+            # The fatal branch's message is all an operator gets from the
+            # crash log; the retryable one must carry the status to act on.
             (401, TwitchAuthError, "rejected a fresh token"),
-            (500, TwitchRequestError, "streams"),
+            (500, TwitchRequestError, "500"),
         )
         for status, expected, message in cases:
             http = _FakeHttp(
@@ -241,7 +243,6 @@ class TwitchClientTests(unittest.TestCase):
                     with self.assertRaises(TwitchError) as ctx:
                         client.stream(TARGET)
                 self.assertIs(type(ctx.exception), expected)
-                # The crash log is all an operator gets on the fatal branch.
                 self.assertIn(message, str(ctx.exception))
                 # Pins that the failure came from the retry, not the first call:
                 # a second token was minted and a second streams call was made.
@@ -282,6 +283,25 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[0].viewers, 10)
         self.assertIsNone(seen[1].viewers)
         self.assertEqual(source.target.name, "shroud")
+
+    async def test_request_failures_are_retried_by_the_poll_loop(self) -> None:
+        # The other half of the split: a TwitchRequestError must be swallowed
+        # and retried, which only holds while it is a SourceFetchError. Pinned
+        # through the loop rather than by asserting the class's bases.
+        source = TwitchSource.for_login("shroud", TwitchClient(CREDS))
+        live = parse_stream(LIVE, source.target)
+        with (
+            patch(
+                "youtube_live_count_chime.twitch.TwitchClient.stream",
+                side_effect=[TwitchRequestError("Twitch request failed"), live],
+            ) as stream,
+            patch("youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            with self.assertLogs("youtube_live_count_chime", "WARNING"):
+                snapshot = await anext(source.snapshots())
+
+        self.assertEqual(stream.call_count, 2)
+        self.assertEqual(snapshot.viewers, 5)
 
     async def test_rejected_credentials_stop_the_source_instead_of_retrying(self) -> None:
         # Bad credentials fail every poll forever, so they must escape the poll
