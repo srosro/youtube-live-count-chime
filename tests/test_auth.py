@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -122,8 +123,12 @@ class _FakeCallbackServer:
 
     A ``None`` event is a connection accepted without a request line ever
     arriving (a browser preconnect), which leaves ``path_seen`` unset and must
-    not end the wait. Every ``timeout`` the flow assigns is recorded, so the
-    per-attempt remainder of the overall budget can be asserted.
+    not end the wait. A ``str`` event is a GET for that path, delivered through
+    the real ``_CallbackHandler.do_GET`` (with only the socket-facing bits
+    stubbed out) so tests exercise the actual callback-vs-stray-request
+    filtering, not a reimplementation of it. Every ``timeout`` the flow
+    assigns is recorded, so the per-attempt remainder of the overall budget
+    can be asserted.
     """
 
     def __init__(self, *events: str | None) -> None:
@@ -140,8 +145,19 @@ class _FakeCallbackServer:
     def handle_request(self) -> None:
         self.timeouts.append(self.timeout)
         event = self._events.pop(0) if self._events else None
-        if event is not None:
-            _CallbackHandler.path_seen = event
+        if event is None:
+            return
+        handler = _CallbackHandler.__new__(_CallbackHandler)
+        handler.path = event
+        handler.wfile = io.BytesIO()
+        with (
+            patch.object(_CallbackHandler, "send_response", lambda self, code: None),
+            patch.object(
+                _CallbackHandler, "send_header", lambda self, name, value: None
+            ),
+            patch.object(_CallbackHandler, "end_headers", lambda self: None),
+        ):
+            handler.do_GET()
 
 
 CALLBACK = "/?code=abc123&state=fixed-state"
@@ -203,6 +219,18 @@ class RunAuthFlowTests(unittest.TestCase):
         # A browser preconnect is accepted and carries nothing. The real
         # callback arrives on a later connection, so the loop must keep going.
         server = _FakeCallbackServer(None, CALLBACK)
+
+        token = self._run_flow(server)
+
+        self.assertEqual(token.login, "watchmepivot")
+        self.assertEqual(len(server.timeouts), 2)
+
+    def test_a_stray_favicon_request_does_not_end_the_wait(self) -> None:
+        # A GET with no code/error — e.g. a browser fetching /favicon.ico
+        # against the loopback port — must not be mistaken for the callback.
+        # If it were, the loop would end on it and parse_callback would then
+        # fail on a state mismatch, and the real callback would never be read.
+        server = _FakeCallbackServer("/favicon.ico", CALLBACK)
 
         token = self._run_flow(server)
 

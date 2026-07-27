@@ -159,11 +159,22 @@ class _CallbackHandler(BaseHTTPRequestHandler):
     timeout = _SOCKET_TIMEOUT_SECONDS
 
     def do_GET(self) -> None:
-        type(self).path_seen = self.path
+        # Only a request carrying a code or error is the real OAuth callback.
+        # A stray GET (a preconnect that did send a request line, a favicon
+        # probe, any other poke at the port) gets a neutral reply and must
+        # not be mistaken for the callback, or the wait loop below ends on
+        # it and parse_callback then fails on a state mismatch.
+        query = parse_qs(urlparse(self.path).query)
+        is_callback = "code" in query or "error" in query
+        if is_callback:
+            type(self).path_seen = self.path
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write(b"Authorized. You can close this tab and return to the terminal.")
+        if is_callback:
+            self.wfile.write(b"Authorized. You can close this tab and return to the terminal.")
+        else:
+            self.wfile.write(b"Waiting for the authorization callback...")
 
     def log_message(self, format: str, *args: object) -> None:
         return  # keep the watcher's stdout clean
@@ -196,11 +207,14 @@ def run_auth_flow(
 
     with server:
         deadline = time.monotonic() + _FLOW_TIMEOUT_SECONDS
-        # do_GET records path_seen for any GET, including a stray favicon
-        # request, which would end this loop and then fail state validation.
-        # Only a connection that never sends a request line at all (e.g. a
-        # bare TCP preconnect) is consumed silently, so keep accepting
-        # requests until we see one or the overall budget expires.
+        # do_GET only records path_seen for a request that actually carries
+        # the callback (a code or error), so a stray request — a preconnect
+        # that did send a request line, a favicon probe, any other poke at
+        # the port — is tolerated and does not end this loop. A connection
+        # that never sends a request line at all (e.g. a bare TCP
+        # preconnect) is also tolerated, just silently rather than with a
+        # reply. Keep accepting requests until we see the real callback or
+        # the overall budget expires.
         while _CallbackHandler.path_seen is None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
