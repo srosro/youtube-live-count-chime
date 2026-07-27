@@ -96,10 +96,10 @@ On start it prints one line naming every channel it is watching, then runs until
 `Ctrl-C`. Each channel's first live count is a silent baseline; after that, a
 rise plays Glass and a fall plays Basso. A channel that isn't live never chimes
 — an offline Twitch channel is fully silent, while an offline YouTube channel
-logs one warning and then goes quiet (see [Limitations](#limitations)) — and it
-starts chiming automatically once it goes live. (If you only wanted the two
-YouTube channels, drop the `-t` flags and no Twitch credentials are needed at
-all.)
+logs one warning per outage and then goes quiet (see
+[Limitations](#limitations)) — and it starts chiming automatically once it goes
+live. (If you only wanted the two YouTube channels, drop the `-t` flags and no
+Twitch credentials are needed at all.)
 
 ## Options
 
