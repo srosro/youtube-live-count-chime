@@ -29,6 +29,14 @@ while [ "$#" -gt 0 ]; do
         # KeepAlive. (--check is the only --c* watcher flag; --help the only --h*.)
         --check | --c*)
             echo "$1 makes the watcher exit without watching — omit it" >&2; exit 2 ;;
+        # --auth is the same class: it exits after authorizing one account, and
+        # it is interactive (opens a browser, binds a port), so the validation
+        # run below would launch the flow instead of validating — main() handles
+        # --auth before --check. (--auth is the only --a* watcher flag.)
+        --auth | --a*)
+            echo "$1 exits after authorizing an account — run it directly," >&2
+            echo "then install without it: youtube-live-count-chime --auth LOGIN" >&2
+            exit 2 ;;
         --env-file) [ "$#" -ge 2 ] || { echo "--env-file needs a path" >&2; exit 2; }
             src_env="$2"; shift 2 ;;
         --env-file=*) src_env="${1#--env-file=}"; shift ;;
