@@ -6,7 +6,7 @@ from urllib.error import HTTPError
 
 from youtube_live_count_chime.chatters import ChatterClient, TwitchChatterNamer
 from youtube_live_count_chime.models import Platform, StreamTarget
-from youtube_live_count_chime.tokens import StoredToken, TokenStore
+from youtube_live_count_chime.tokens import StoredToken, TokenStore, TokenStoreError
 from youtube_live_count_chime.twitch import TwitchCredentials, TwitchError
 
 
@@ -39,6 +39,13 @@ class _ExplodingClient:
         raise RuntimeError("chatters unavailable")
 
 
+class _ExplodingStore:
+    """A token store whose backing file has gone corrupt mid-run."""
+
+    def get(self, login: str) -> StoredToken | None:
+        raise TokenStoreError("token file is corrupt")
+
+
 class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
     async def test_first_call_seeds_silently(self) -> None:
         # Otherwise the first tick after startup announces everyone already in chat.
@@ -66,12 +73,21 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         client = _FakeClient(
-            [frozenset({"lurker_a"}), frozenset({"lurker_a", "joe_doe"})]
+            [
+                frozenset({"lurker_a"}),
+                frozenset({"lurker_a", "joe_doe"}),  # stream-2 seed roster
+                frozenset({"lurker_a", "joe_doe", "amy"}),  # stream-2 next roster
+            ]
         )
         namer = TwitchChatterNamer(client, _FakeStore(TOKEN))
         await namer.arrivals(TARGET, "stream-1")
 
         self.assertEqual(await namer.arrivals(TARGET, "stream-2"), ())
+
+        # Diffed against stream-2's seed roster ({lurker_a, joe_doe}), not
+        # stream-1's ({lurker_a}) — an implementation that recorded the new
+        # stream_id but kept the old roster would wrongly report joe_doe here.
+        self.assertEqual(await namer.arrivals(TARGET, "stream-2"), ("amy",))
 
     async def test_unauthorized_channel_yields_no_names_without_calling_out(
         self,
@@ -84,6 +100,14 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_chatters_failure_degrades_to_no_names(self) -> None:
         namer = TwitchChatterNamer(_ExplodingClient(), _FakeStore(TOKEN))
+
+        self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+
+    async def test_a_corrupt_token_store_degrades_to_no_names(self) -> None:
+        # A malformed token file must not escape as an exception and kill the
+        # watcher for every channel — it degrades to () like every other
+        # arrivals() failure path.
+        namer = TwitchChatterNamer(_FakeClient([]), _ExplodingStore())
 
         self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
 
@@ -126,13 +150,21 @@ class ChatterClientTests(unittest.TestCase):
 
     def test_a_non_401_failure_is_not_retried(self) -> None:
         client = ChatterClient(TwitchCredentials("id", "secret"), cast(TokenStore, None))
+        responses: list[object] = [self._http_error(500)]
+
+        def fake_get_json(request: object) -> object:
+            item = responses.pop(0)
+            if isinstance(item, HTTPError):
+                raise item
+            return item
 
         with patch(
-            "youtube_live_count_chime.chatters.get_json",
-            side_effect=self._http_error(500),
+            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
         ):
             with self.assertRaises(TwitchError):
                 client.chatters(TOKEN)
+
+        self.assertEqual(responses, [])  # exactly one call: no refresh, no retry
 
 
 if __name__ == "__main__":

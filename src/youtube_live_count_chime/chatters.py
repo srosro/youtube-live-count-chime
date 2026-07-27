@@ -145,10 +145,10 @@ class TwitchChatterNamer:
 
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
         """Return newly-seen chatters, or ``()`` when a name cannot be known."""
-        token = self.store.get(target.name)
-        if token is None:
-            return ()
         try:
+            token = self.store.get(target.name)
+            if token is None:
+                return ()
             current = await asyncio.to_thread(self.client.chatters, token)
         except Exception as error:
             _LOGGER.warning("could not read chat roster for %s: %s", target.key, error)
