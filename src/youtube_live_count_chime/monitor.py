@@ -56,20 +56,32 @@ async def monitor(
     roster = Roster(tuple(source.name for source in sources))
 
     async def consume(source: StreamSource) -> None:
+        # Sampling runs every poll, and a broken namer breaks on every one of
+        # them, so warn only on the transition *into* failure; a successful
+        # sample re-arms it for the next distinct outage. Same shape as
+        # poll_snapshots' fetch warning, for the same reason: otherwise one
+        # permanently broken namer writes 12 lines a minute forever.
+        namer_warned = False
+
         async def sample_arrivals(snapshot: StreamSnapshot) -> tuple[str, ...]:
             """Advance the namer's roster by one poll, degrading to no names."""
+            nonlocal namer_warned
             if namer is None or snapshot.stream_id is None:
                 return ()
             # ArrivalNamer is a public protocol, so treat it like play/notify:
             # a name is a nice-to-have and must never cost the notification or
             # the chime.
             try:
-                return await namer.arrivals(snapshot.target, snapshot.stream_id)
+                names = await namer.arrivals(snapshot.target, snapshot.stream_id)
             except Exception as error:
-                _LOGGER.warning(
-                    "could not name arrivals for %s: %s", source.name, error
-                )
+                if not namer_warned:
+                    _LOGGER.warning(
+                        "could not name arrivals for %s: %s", source.name, error
+                    )
+                    namer_warned = True
                 return ()
+            namer_warned = False
+            return names
 
         previous: StreamSnapshot | None = None
         try:

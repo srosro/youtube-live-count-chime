@@ -179,13 +179,24 @@ class ChatterClient:
 class TwitchChatterNamer:
     """Name arrivals by diffing successive chat rosters per broadcast."""
 
-    __slots__ = ("client", "store", "_state")
+    __slots__ = ("client", "store", "_state", "_warned")
 
     def __init__(self, client: _Chatters, store: _TokenLookup) -> None:
         self.client = client
         self.store = store
         # key -> (stream_id, roster) captured at the previous query
         self._state: dict[str, tuple[str, frozenset[str]]] = {}
+        # Target keys currently in an outage. The monitor samples every poll,
+        # and these failures persist across polls (a channel that never
+        # granted the scope, a Helix outage, a corrupt token file), so warn
+        # only on the transition *into* failure; a successful read re-arms it
+        # for the next distinct outage. Same shape as poll_snapshots.
+        self._warned: set[str] = set()
+
+    def _warn_once(self, key: str, message: str, error: Exception) -> None:
+        if key not in self._warned:
+            self._warned.add(key)
+            _LOGGER.warning("%s for %s: %s", message, key, error)
 
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
         """Return newly-seen chatters, or ``()`` when a name cannot be known."""
@@ -203,7 +214,7 @@ class TwitchChatterNamer:
         try:
             token = self.store.get(target.name)
         except TokenStoreError as error:
-            _LOGGER.warning("could not read the token store for %s: %s", target.key, error)
+            self._warn_once(target.key, "could not read the token store", error)
             return ()
         if token is None:
             return ()
@@ -216,8 +227,9 @@ class TwitchChatterNamer:
             # Twitch request, and the error log there fires once.
             # TokenStoreError can surface here too — _refresh saves the
             # rotated token through the store.
-            _LOGGER.warning("could not read chat roster for %s: %s", target.key, error)
+            self._warn_once(target.key, "could not read chat roster", error)
             return ()
+        self._warned.discard(target.key)
 
         previous = self._state.get(target.key)
         self._state[target.key] = (stream_id, current)

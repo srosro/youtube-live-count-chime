@@ -168,6 +168,40 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AttributeError):
             await namer.arrivals(TARGET, "stream-1")
 
+    async def test_a_sustained_outage_warns_once_and_re_arms_on_recovery(self) -> None:
+        # The monitor samples every poll (12/min per channel), so a channel
+        # that never granted the scope — or a Helix outage — would otherwise
+        # write ~17k identical warnings a day. Warn on the transition into
+        # failure only, and re-arm once a read succeeds.
+        rosters = [frozenset({"lurker"}), frozenset({"lurker", "joe_doe"})]
+
+        class _FlakyClient:
+            def __init__(self) -> None:
+                self.failing = True
+
+            def chatters(self, token: StoredToken) -> frozenset[str]:
+                if self.failing:
+                    raise TwitchRequestError("chatters unavailable")
+                return rosters.pop(0)
+
+        client = _FlakyClient()
+        namer = TwitchChatterNamer(client, _FakeStore(TOKEN))
+
+        with self.assertLogs("youtube_live_count_chime.chatters", "WARNING") as outage:
+            for _ in range(4):
+                self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+        self.assertEqual(len(outage.records), 1)
+
+        client.failing = False
+        await namer.arrivals(TARGET, "stream-1")  # recovers: seeds and re-arms
+        self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ("joe_doe",))
+
+        # A second, distinct outage is worth telling the operator about again.
+        client.failing = True
+        with self.assertLogs("youtube_live_count_chime.chatters", "WARNING") as again:
+            self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+        self.assertEqual(len(again.records), 1)
+
     async def test_a_corrupt_token_store_degrades_to_no_names(self) -> None:
         # A malformed token file must not escape as an exception and kill the
         # watcher for every channel — it degrades to () like every other

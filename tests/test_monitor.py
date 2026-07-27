@@ -223,7 +223,9 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         # nondeterministically, so only this target's are pinned.)
         self.assertEqual([ask for ask in namer.asked if ask[0] == a], [(a, "s1")] * 2)
 
-    async def test_fall_chimes_but_never_notifies_or_asks_for_names(self) -> None:
+    async def test_a_fall_posts_no_notification_though_the_roster_is_still_sampled(
+        self,
+    ) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
 
@@ -353,14 +355,19 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             "+3 watching twitch chan",
         ])
         self.assertEqual(played, [UP, UP])
-        self.assertEqual(len(logs.records), 3)  # one per live poll, all sampled
+        # Sampling runs every poll, so warning per failure would be 12 lines a
+        # minute forever: the operator is told once per outage.
+        self.assertEqual(len(logs.records), 1)
 
     async def test_a_chatter_who_joined_on_a_flat_poll_is_not_named_on_the_next_rise(
         self,
     ) -> None:
         # The window the roster diff spans must be one poll, not "since the
-        # last rise": joe_doe is already in chat when the count rises, so he is
-        # not who arrived. Sampling only on rises would name him here.
+        # last rise". Two rises with a flat poll between them: joe_doe joins
+        # during the flat poll, so by the second rise he is already in chat and
+        # nobody arrived — the rise is an embed or mobile viewer chat cannot
+        # see. Sampling only on rises would diff the second rise against the
+        # *first* rise's roster and announce "joe_doe is now watching".
         a = StreamTarget(Platform.TWITCH, "chan")
         token = StoredToken("chan", "42", "access-placeholder", "refresh-placeholder")
 
@@ -368,31 +375,55 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             def get(self, login: str) -> StoredToken | None:
                 return token
 
-        class _FakeClient:
-            def __init__(self, rosters: list[frozenset[str]]) -> None:
-                self._rosters = rosters
+        class _Channel:
+            """A source whose chat roster advances in lockstep with each poll.
+
+            The roster is a function of poll number rather than of call
+            number, so what the namer sees does not depend on how often the
+            monitor chooses to ask — which is exactly what is under test.
+            """
+
+            name = "twitch:chan"
+
+            def __init__(self, script: list[tuple[int, frozenset[str]]]) -> None:
+                self._script = script
+                self._roster: frozenset[str] = frozenset()
+                self.reads = 0
+
+            async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+                for viewers, roster in self._script:
+                    self._roster = roster
+                    yield live(a, viewers)
 
             def chatters(self, token: StoredToken) -> frozenset[str]:
-                return self._rosters.pop(0)
+                self.reads += 1
+                return self._roster
 
-        client = _FakeClient(
+        channel = _Channel(
             [
-                frozenset({"lurker"}),  # baseline poll: seeds
-                frozenset({"lurker", "joe_doe"}),  # no-change poll: joe_doe joins
-                frozenset({"lurker", "joe_doe"}),  # rising poll: nobody new
+                (1, frozenset({"lurker"})),  # baseline: seeds
+                (2, frozenset({"lurker", "amy"})),  # rise 1: amy arrived
+                (2, frozenset({"lurker", "amy", "joe_doe"})),  # flat: joe_doe joins
+                (3, frozenset({"lurker", "amy", "joe_doe"})),  # rise 2: nobody new
             ]
         )
         posted: list[tuple[str, str]] = []
 
         await monitor(
-            [FakeSource("twitch:chan", [live(a, 1), live(a, 1), live(a, 2)])],
+            [channel],
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
             notify=lambda title, body: posted.append((title, body)),
-            namer=TwitchChatterNamer(client, _FakeStore()),
+            namer=TwitchChatterNamer(channel, _FakeStore()),
         )
 
-        self.assertEqual([title for title, _ in posted], ["+1 watching twitch chan"])
+        self.assertEqual(
+            [title for title, _ in posted],
+            ["amy is now watching twitch chan", "+1 watching twitch chan"],
+        )
+        # One roster read per live poll. Pinning the count is what stops a
+        # namer that is never called at all from passing this test.
+        self.assertEqual(channel.reads, 4)
 
 
 if __name__ == "__main__":
