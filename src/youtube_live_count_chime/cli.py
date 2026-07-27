@@ -16,9 +16,9 @@ from youtube_live_count_chime.models import ArrivalNamer, StreamSource
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
 from youtube_live_count_chime.tokens import TokenStore
 from youtube_live_count_chime.twitch import (
+    TwitchAuthError,
     TwitchClient,
     TwitchCredentials,
-    TwitchError,
     TwitchSource,
 )
 from youtube_live_count_chime.youtube import YouTubeSource
@@ -164,7 +164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if config.auth is not None:
         try:
             token = run_auth_flow(config.auth, TwitchCredentials.from_env(), TokenStore())
-        except (AuthError, TwitchError, ValueError) as error:
+        except (AuthError, TwitchAuthError, ValueError) as error:
             print(f"Error: {error}", file=sys.stderr, flush=True)
             return 2
         print(
@@ -175,7 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         sources = build_sources(config)
-    except (ValueError, TwitchError) as error:
+    except (ValueError, TwitchAuthError) as error:
         print(f"Error: {error}", file=sys.stderr, flush=True)
         return 2
 

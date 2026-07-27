@@ -66,13 +66,17 @@ fi
 # anything on disk — otherwise a bad reinstall could overwrite working
 # credentials, or KeepAlive could respawn an agent that just exits. `--check`
 # runs the same parse_config/build_sources the watcher uses, so a malformed
-# flag, a bad handle, or missing/empty Twitch credentials all fail here.
-# (It cannot check that credentials actually authenticate or that a handle is
-# live — those surface as a logged warning at runtime.) The subshell mirrors
-# the agent's runtime environment: cd to the WorkingDirectory the plist sets
-# below (so a relative sound path validates the same way it will resolve at
-# runtime) and the two vars unset before sourcing the candidate file (so the
-# installing shell's exported credentials can't mask an empty file).
+# flag, a bad handle, or missing/empty Twitch credentials all fail here. (It
+# cannot check that credentials actually authenticate or that a handle is
+# live. At runtime an offline or unknown YouTube handle warns once per outage,
+# while an unknown Twitch login is indistinguishable from an offline one and
+# stays quiet; credentials Twitch refuses exit the watcher, which KeepAlive
+# turns into a 30s respawn loop that logs the reason each time.) The subshell
+# mirrors the agent's runtime environment: cd to the WorkingDirectory the
+# plist sets below (so a relative sound path validates the same way it will
+# resolve at runtime) and the two vars unset before sourcing the candidate
+# file (so the installing shell's exported credentials can't mask an empty
+# file).
 candidate_env="${src_env:-$env_file}"
 ( set +e
     cd "$HOME"

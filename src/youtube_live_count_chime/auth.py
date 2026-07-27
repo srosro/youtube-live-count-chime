@@ -24,7 +24,7 @@ from youtube_live_count_chime.tokens import StoredToken, TokenStore
 from youtube_live_count_chime.twitch import (
     TOKEN_URL,
     TwitchCredentials,
-    TwitchError,
+    TwitchRequestError,
     get_json,
     object_dict,
 )
@@ -125,7 +125,7 @@ def _exchange_code(code: str, credentials: TwitchCredentials) -> tuple[str, str]
         payload = get_json(request)
     except HTTPError as error:
         raise AuthError(f"code exchange failed (HTTP {error.code})") from error
-    except TwitchError as error:
+    except TwitchRequestError as error:
         raise AuthError(f"code exchange failed: {error}") from error
     return parse_token_response(payload)
 
@@ -144,7 +144,7 @@ def _identify(access_token: str, credentials: TwitchCredentials) -> tuple[str, s
         payload = get_json(request)
     except HTTPError as error:
         raise AuthError(f"could not identify the account (HTTP {error.code})") from error
-    except TwitchError as error:
+    except TwitchRequestError as error:
         raise AuthError(f"could not identify the account: {error}") from error
     return parse_identity(payload)
 

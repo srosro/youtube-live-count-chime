@@ -10,7 +10,11 @@ from youtube_live_count_chime.chatters import (
 )
 from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.tokens import StoredToken, TokenStoreError
-from youtube_live_count_chime.twitch import TwitchCredentials, TwitchError
+from youtube_live_count_chime.twitch import (
+    TwitchAuthError,
+    TwitchCredentials,
+    TwitchRequestError,
+)
 
 
 TARGET = StreamTarget(Platform.TWITCH, "watchmepivot")
@@ -38,8 +42,13 @@ class _FakeClient:
 
 
 class _ExplodingClient:
+    """A chatters read that fails the way the caller was told it might."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
     def chatters(self, token: StoredToken) -> frozenset[str]:
-        raise TwitchError("chatters unavailable")
+        raise self._error
 
 
 class _BuggyClient:
@@ -66,19 +75,19 @@ class ParseChattersTests(unittest.TestCase):
         # What a proxy's HTML error page or a truncated body actually parses to.
         for payload in ("nope", {"data": "x"}, {}):
             with self.subTest(payload=payload):
-                with self.assertRaises(TwitchError):
+                with self.assertRaises(TwitchRequestError):
                     parse_chatters(payload)
 
     def test_a_non_dict_entry_is_rejected(self) -> None:
         payload = {"data": [{"user_login": "joe_doe"}, "not-a-dict"]}
 
-        with self.assertRaises(TwitchError):
+        with self.assertRaises(TwitchRequestError):
             parse_chatters(payload)
 
     def test_a_missing_or_empty_user_login_is_rejected(self) -> None:
         for entry in ({"nickname": "joe_doe"}, {"user_login": ""}):
             with self.subTest(entry=entry):
-                with self.assertRaises(TwitchError):
+                with self.assertRaises(TwitchRequestError):
                     parse_chatters({"data": [entry]})
 
 
@@ -135,12 +144,23 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.calls, 0)
 
     async def test_a_chatters_failure_degrades_to_no_names(self) -> None:
-        namer = TwitchChatterNamer(_ExplodingClient(), _FakeStore(TOKEN))
+        # Both failure shapes are degradations: a transient request failure and
+        # a permanent authorization failure. Neither may escape into the
+        # monitor loop, where it would tear the whole watcher down over a
+        # nice-to-have name.
+        for error in (
+            TwitchRequestError("chatters unavailable"),
+            TwitchAuthError("watchmepivot is not authorized to read its own chat roster"),
+            TokenStoreError("token file is corrupt"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                namer = TwitchChatterNamer(_ExplodingClient(error), _FakeStore(TOKEN))
 
-        self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+                self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
 
     async def test_a_programming_error_is_not_swallowed_as_no_names(self) -> None:
-        # Only TwitchError/TokenStoreError are degradations. A bug must escape
+        # Only TwitchRequestError/TwitchAuthError/TokenStoreError are
+        # degradations. A bug must escape
         # to monitor's boundary handler instead of silently killing naming for
         # the rest of the run while the watcher reports healthy.
         namer = TwitchChatterNamer(_BuggyClient(), _FakeStore(TOKEN))
@@ -209,13 +229,13 @@ class ChatterClientTests(unittest.TestCase):
             "youtube_live_count_chime.chatters.get_json", side_effect=first_rise
         ):
             with self.assertLogs("youtube_live_count_chime.chatters", "ERROR") as logs:
-                with self.assertRaises(TwitchError):
+                with self.assertRaises(TwitchAuthError):
                     client.chatters(TOKEN)
         self.assertIn("--auth watchmepivot", "\n".join(logs.output))
 
         with patch("youtube_live_count_chime.chatters.get_json") as get_json:
             with self.assertNoLogs("youtube_live_count_chime.chatters", "ERROR"):
-                with self.assertRaises(TwitchError):
+                with self.assertRaises(TwitchAuthError):
                     client.chatters(TOKEN)
 
         # No read, no refresh POST, no token-file rewrite, and told only once.
@@ -235,7 +255,7 @@ class ChatterClientTests(unittest.TestCase):
         with patch(
             "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
         ):
-            with self.assertRaises(TwitchError):
+            with self.assertRaises(TwitchRequestError):
                 client.chatters(TOKEN)
 
         self.assertEqual(responses, [])  # exactly one call: no refresh, no retry

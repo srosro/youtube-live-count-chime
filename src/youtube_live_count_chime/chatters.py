@@ -21,7 +21,8 @@ from youtube_live_count_chime.tokens import StoredToken, TokenStoreError
 from youtube_live_count_chime.twitch import (
     TOKEN_URL,
     TwitchCredentials,
-    TwitchError,
+    TwitchAuthError,
+    TwitchRequestError,
     get_json,
     object_dict,
 )
@@ -54,16 +55,16 @@ def parse_chatters(payload: object) -> frozenset[str]:
     value = object_dict(payload)
     data = value.get("data") if value is not None else None
     if not isinstance(data, list):
-        raise TwitchError("invalid Twitch chatters response")
+        raise TwitchRequestError("invalid Twitch chatters response")
 
     logins: set[str] = set()
     for item in cast("list[object]", data):
         entry = object_dict(item)
         if entry is None:
-            raise TwitchError("invalid Twitch chatter entry")
+            raise TwitchRequestError("invalid Twitch chatter entry")
         login = entry.get("user_login")
         if not isinstance(login, str) or not login:
-            raise TwitchError("invalid Twitch chatter entry")
+            raise TwitchRequestError("invalid Twitch chatter entry")
         logins.add(login)
     return frozenset(logins)
 
@@ -117,14 +118,14 @@ class ChatterClient:
         try:
             payload = get_json(request)
         except HTTPError as error:
-            raise TwitchError(f"token refresh failed (HTTP {error.code})") from error
+            raise TwitchRequestError(f"token refresh failed (HTTP {error.code})") from error
         fields = object_dict(payload)
         if fields is None:
-            raise TwitchError("invalid Twitch refresh response")
+            raise TwitchRequestError("invalid Twitch refresh response")
         access = fields.get("access_token")
         refresh = fields.get("refresh_token")
         if not isinstance(access, str) or not access:
-            raise TwitchError("invalid Twitch refresh response")
+            raise TwitchRequestError("invalid Twitch refresh response")
         rotated = StoredToken(
             token.login,
             token.user_id,
@@ -134,8 +135,8 @@ class ChatterClient:
         self.store.save(rotated)
         return rotated
 
-    def _unauthorized_error(self, login: str) -> TwitchError:
-        return TwitchError(f"{login} is not authorized to read its own chat roster")
+    def _unauthorized_error(self, login: str) -> TwitchAuthError:
+        return TwitchAuthError(f"{login} is not authorized to read its own chat roster")
 
     def chatters(self, token: StoredToken) -> frozenset[str]:
         """Return the chat roster, refreshing the user token once after HTTP 401."""
@@ -145,14 +146,14 @@ class ChatterClient:
             return self._request(token)
         except HTTPError as error:
             if error.code != 401:
-                raise TwitchError(
+                raise TwitchRequestError(
                     f"Twitch chatters request failed (HTTP {error.code})"
                 ) from error
         try:
             return self._request(self._refresh(token))
         except HTTPError as error:
             if error.code != 401:
-                raise TwitchError(
+                raise TwitchRequestError(
                     f"Twitch chatters request failed (HTTP {error.code})"
                 ) from error
             # A freshly refreshed token rejected again is a permanent 401, not
@@ -189,9 +190,11 @@ class TwitchChatterNamer:
             # authorized Twitch account would otherwise be named from that
             # account's chat roster. YouTube arrivals are never named.
             return ()
-        # Only the two expected degradations are absorbed: anything else is a
-        # bug, and must reach the monitor's boundary handler rather than being
-        # swallowed as "no names" on every rise forever.
+        # Only the expected degradations are absorbed: a transient request
+        # failure, a permanent authorization failure, and an unreadable token
+        # store. Anything else is a bug, and must reach the monitor's boundary
+        # handler rather than being swallowed as "no names" on every rise
+        # forever.
         try:
             token = self.store.get(target.name)
         except TokenStoreError as error:
@@ -201,7 +204,13 @@ class TwitchChatterNamer:
             return ()
         try:
             current = await asyncio.to_thread(self.client.chatters, token)
-        except TwitchError as error:
+        except (TwitchRequestError, TwitchAuthError, TokenStoreError) as error:
+            # TwitchAuthError is permanent, but the roster is a nice-to-have:
+            # a channel that never grants the scope must not tear the watcher
+            # down. The permanent-401 memoization above keeps this to one
+            # Twitch request, and the error log there fires once.
+            # TokenStoreError can surface here too — _refresh saves the
+            # rotated token through the store.
             _LOGGER.warning("could not read chat roster for %s: %s", target.key, error)
             return ()
 

@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from http.client import HTTPException
 import json
 from json import JSONDecodeError
-import logging
 import os
 import threading
 from typing import Final, Self, cast
@@ -17,11 +15,12 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from youtube_live_count_chime.models import (
-    POLL_INTERVAL_SECONDS,
     Platform,
+    SourceFetchError,
     StreamSnapshot,
     StreamTarget,
     normalize_handle,
+    poll_snapshots,
 )
 
 
@@ -29,11 +28,27 @@ TOKEN_URL: Final = "https://id.twitch.tv/oauth2/token"
 STREAMS_URL: Final = "https://api.twitch.tv/helix/streams"
 _CLIENT_ID_ENV: Final = "TWITCH_CLIENT_ID"
 _CLIENT_SECRET_ENV: Final = "TWITCH_CLIENT_SECRET"
-_LOGGER: Final = logging.getLogger(__name__)
+# Token-endpoint statuses that mean the credentials themselves are refused.
+# Everything else it returns (429 rate limits, 5xx degradation) is transient.
+_CREDENTIAL_REJECTED_STATUSES: Final = frozenset({400, 401, 403})
 
 
-class TwitchError(RuntimeError):
-    """Raised when a Twitch credential or response cannot be used."""
+class TwitchRequestError(SourceFetchError):
+    """Raised when one Twitch request fails in a way a later poll may survive."""
+
+
+class TwitchAuthError(RuntimeError):
+    """Raised when the credentials are missing or Twitch refuses them.
+
+    Either way no poll can ever succeed, so this is deliberately *not* a
+    ``SourceFetchError``. Missing credentials are raised during
+    ``cli.build_sources`` and caught by ``cli.main``, which exits 2 with a
+    clean message before any poll loop exists. Credentials Twitch rejects
+    surface later, from the poll loop, where being swallowed would hammer the
+    token endpoint behind a log that looks healthy — so they tear the watcher
+    down with a traceback instead. Under the launch agent that is a throttled
+    respawn loop rather than a true stop, but each attempt says why in the log.
+    """
 
 
 def object_dict(value: object) -> dict[str, object] | None:
@@ -62,9 +77,9 @@ class TwitchCredentials:
         client_id = os.environ.get(_CLIENT_ID_ENV, "")
         client_secret = os.environ.get(_CLIENT_SECRET_ENV, "")
         if not client_id:
-            raise TwitchError(f"{_CLIENT_ID_ENV} is not set")
+            raise TwitchAuthError(f"{_CLIENT_ID_ENV} is not set")
         if not client_secret:
-            raise TwitchError(f"{_CLIENT_SECRET_ENV} is not set")
+            raise TwitchAuthError(f"{_CLIENT_SECRET_ENV} is not set")
         return cls(client_id, client_secret)
 
 
@@ -73,7 +88,9 @@ def parse_app_token(payload: object) -> str:
     value = object_dict(payload)
     token = value.get("access_token") if value is not None else None
     if not isinstance(token, str) or not token:
-        raise TwitchError("invalid Twitch token response")
+        # A 200 with an unexpected body is transport-shaped (proxy, captive
+        # portal, partial degradation), not a credential rejection.
+        raise TwitchRequestError("invalid Twitch token response")
     return token
 
 
@@ -82,7 +99,7 @@ def parse_stream(payload: object, target: StreamTarget) -> StreamSnapshot:
     value = object_dict(payload)
     data = value.get("data") if value is not None else None
     if not isinstance(data, list):
-        raise TwitchError("invalid Twitch streams response")
+        raise TwitchRequestError("invalid Twitch streams response")
 
     if not data:
         return StreamSnapshot.offline(target)
@@ -91,7 +108,7 @@ def parse_stream(payload: object, target: StreamTarget) -> StreamSnapshot:
     stream_id = entry.get("id") if entry is not None else None
     viewers = _strict_int(entry.get("viewer_count")) if entry is not None else None
     if not isinstance(stream_id, str) or not stream_id or viewers is None or viewers < 0:
-        raise TwitchError("invalid Twitch stream entry")
+        raise TwitchRequestError("invalid Twitch stream entry")
     return StreamSnapshot(target, stream_id, viewers)
 
 
@@ -102,7 +119,7 @@ def get_json(request: Request) -> object:
     except HTTPError:
         raise
     except (URLError, HTTPException, OSError, JSONDecodeError, UnicodeDecodeError) as error:
-        raise TwitchError(
+        raise TwitchRequestError(
             f"Twitch request failed ({type(error).__name__})"
         ) from error
 
@@ -138,7 +155,10 @@ class TwitchClient:
         try:
             payload = get_json(request)
         except HTTPError as error:
-            raise TwitchError(f"Twitch token request failed (HTTP {error.code})") from error
+            message = f"Twitch token request failed (HTTP {error.code})"
+            if error.code in _CREDENTIAL_REJECTED_STATUSES:
+                raise TwitchAuthError(message) from error
+            raise TwitchRequestError(message) from error
         token = parse_app_token(payload)
         self._app_token = token
         self._generation += 1
@@ -172,8 +192,8 @@ class TwitchClient:
         return parse_stream(get_json(request), target)
 
     @staticmethod
-    def _streams_error(error: HTTPError) -> TwitchError:
-        return TwitchError(f"Twitch streams request failed (HTTP {error.code})")
+    def _streams_error(error: HTTPError) -> TwitchRequestError:
+        return TwitchRequestError(f"Twitch streams request failed (HTTP {error.code})")
 
     def stream(self, target: StreamTarget) -> StreamSnapshot:
         """Return the target's snapshot, refreshing the token once after HTTP 401."""
@@ -186,6 +206,14 @@ class TwitchClient:
         try:
             return self._get_streams(self._refresh_token(generation), target)
         except HTTPError as error:
+            if error.code == 401:
+                # _refresh_token returns a token newer than the one that just
+                # 401'd (minted here or by a concurrent refresh), so a second
+                # 401 is a Client-Id/token mismatch, not expiry — retrying
+                # never helps.
+                raise TwitchAuthError(
+                    "Twitch streams rejected a refreshed token"
+                ) from error
             raise self._streams_error(error) from error
 
 
@@ -203,13 +231,6 @@ class TwitchSource:
         target = StreamTarget(Platform.TWITCH, normalize_handle(login))
         return cls(name=target.key, target=target, client=client)
 
-    async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield live/offline snapshots, retrying request failures after each poll."""
-        while True:
-            try:
-                snapshot = await asyncio.to_thread(self.client.stream, self.target)
-            except TwitchError as error:
-                _LOGGER.warning("could not fetch Twitch stream for %s: %s", self.name, error)
-            else:
-                yield snapshot
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        return poll_snapshots(self.name, lambda: self.client.stream(self.target))

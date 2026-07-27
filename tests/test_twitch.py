@@ -11,9 +11,10 @@ from urllib.request import Request
 
 from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.twitch import (
+    TwitchAuthError,
     TwitchClient,
     TwitchCredentials,
-    TwitchError,
+    TwitchRequestError,
     TwitchSource,
     parse_app_token,
     parse_stream,
@@ -85,7 +86,7 @@ class CredentialsTests(unittest.TestCase):
 
     def test_from_env_missing_var_raises_named_error(self) -> None:
         with patch.dict(os.environ, {"TWITCH_CLIENT_ID": "abc"}, clear=True):
-            with self.assertRaises(TwitchError) as ctx:
+            with self.assertRaises(TwitchAuthError) as ctx:
                 TwitchCredentials.from_env()
         self.assertIn("TWITCH_CLIENT_SECRET", str(ctx.exception))
         self.assertNotIn("abc", str(ctx.exception))
@@ -95,10 +96,10 @@ class ParseTokenTests(unittest.TestCase):
     def test_valid_token(self) -> None:
         self.assertEqual(parse_app_token({"access_token": "tok"}), "tok")
 
-    def test_invalid_token_raises(self) -> None:
+    def test_invalid_token_raises_a_retryable_error(self) -> None:
         cases: tuple[object, ...] = ({}, {"access_token": ""}, {"access_token": 1}, [])
         for payload in cases:
-            with self.subTest(payload=payload), self.assertRaises(TwitchError):
+            with self.subTest(payload=payload), self.assertRaises(TwitchRequestError):
                 parse_app_token(payload)
 
 
@@ -123,7 +124,7 @@ class ParseStreamTests(unittest.TestCase):
             "nope",
         )
         for data in cases:
-            with self.subTest(data=data), self.assertRaises(TwitchError):
+            with self.subTest(data=data), self.assertRaises(TwitchRequestError):
                 parse_stream({"data": data}, TARGET)
 
 
@@ -178,28 +179,68 @@ class TwitchClientTests(unittest.TestCase):
         http = _FakeHttp(token=[{"access_token": "tok"}], streams=[_http_error(500)])
         client = TwitchClient(CREDS)
         with patch("youtube_live_count_chime.twitch.urlopen", http):
-            with self.assertRaises(TwitchError) as ctx:
+            with self.assertRaises(TwitchRequestError) as ctx:
                 client.stream(TARGET)
         self.assertIn("500", str(ctx.exception))
         self.assertIn("streams", str(ctx.exception))
 
-    def test_transport_exception_becomes_twitch_error(self) -> None:
+    def test_transport_exception_becomes_a_retryable_error(self) -> None:
         http = _FakeHttp(
             token=[{"access_token": "tok"}], streams=[BadStatusLine("garbage")]
         )
         client = TwitchClient(CREDS)
         with patch("youtube_live_count_chime.twitch.urlopen", http):
-            with self.assertRaises(TwitchError):
+            with self.assertRaises(TwitchRequestError):
                 client.stream(TARGET)
 
-    def test_token_endpoint_error_names_token_not_streams(self) -> None:
-        http = _FakeHttp(token=[_http_error(403)], streams=[])
-        client = TwitchClient(CREDS)
-        with patch("youtube_live_count_chime.twitch.urlopen", http):
-            with self.assertRaises(TwitchError) as ctx:
-                client.stream(TARGET)
-        self.assertIn("token", str(ctx.exception))
-        self.assertIn("403", str(ctx.exception))
+    def test_token_endpoint_classifies_by_status(self) -> None:
+        # 400/401/403 mean the credentials are refused, so the poll loop must
+        # not swallow them; 429/5xx are the endpoint busy or degraded, which a
+        # later poll may survive.
+        cases = {
+            400: TwitchAuthError,
+            401: TwitchAuthError,
+            403: TwitchAuthError,
+            429: TwitchRequestError,
+            500: TwitchRequestError,
+            503: TwitchRequestError,
+        }
+        for status, expected in cases.items():
+            http = _FakeHttp(token=[_http_error(status)], streams=[])
+            client = TwitchClient(CREDS)
+            with self.subTest(status=status):
+                with patch("youtube_live_count_chime.twitch.urlopen", http):
+                    with self.assertRaises(expected) as ctx:
+                        client.stream(TARGET)
+                # The failure names the token endpoint, not streams.
+                self.assertIn("token", str(ctx.exception))
+                self.assertIn(str(status), str(ctx.exception))
+
+    def test_streams_retry_after_401_classifies_by_status(self) -> None:
+        # Both branches of the post-refresh retry. A 401 that survives a newer
+        # token is a Client-Id mismatch — the mirror of the bug the split
+        # exists to fix, so retrying it forever would be silent — while a 500
+        # on the retry is the same transient outage as on the first call.
+        cases = (
+            # The fatal branch's message is all an operator gets from the
+            # crash log; the retryable one must carry the status to act on.
+            (401, TwitchAuthError, "rejected a refreshed token"),
+            (500, TwitchRequestError, "500"),
+        )
+        for status, expected, message in cases:
+            http = _FakeHttp(
+                token=[{"access_token": "old"}, {"access_token": "new"}],
+                streams=[_http_error(401), _http_error(status)],
+            )
+            client = TwitchClient(CREDS)
+            with self.subTest(status=status):
+                with patch("youtube_live_count_chime.twitch.urlopen", http):
+                    with self.assertRaises(expected) as ctx:
+                        client.stream(TARGET)
+                self.assertIn(message, str(ctx.exception))
+                # Pins that the failure came from the retry, not the first call:
+                # a second token was minted and a second streams call was made.
+                self.assertEqual((http.token_calls, http.streams_calls), (2, 2))
 
 
 class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
@@ -225,7 +266,7 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=lambda target: parse_stream(next(payloads), target),
             ),
             patch(
-                "youtube_live_count_chime.twitch.asyncio.sleep", new_callable=AsyncMock
+                "youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock
             ),
         ):
             seen = []
@@ -236,6 +277,38 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[0].viewers, 10)
         self.assertIsNone(seen[1].viewers)
         self.assertEqual(source.target.name, "shroud")
+
+    async def test_request_failures_are_retried_by_the_poll_loop(self) -> None:
+        # The other half of the split: a TwitchRequestError must be swallowed
+        # and retried, which only holds while it is a SourceFetchError. Pinned
+        # through the loop rather than by asserting the class's bases.
+        source = TwitchSource.for_login("shroud", TwitchClient(CREDS))
+        live = parse_stream(LIVE, source.target)
+        with (
+            patch(
+                "youtube_live_count_chime.twitch.TwitchClient.stream",
+                side_effect=[TwitchRequestError("Twitch request failed"), live],
+            ),
+            patch("youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            with self.assertLogs("youtube_live_count_chime", "WARNING"):
+                snapshot = await anext(source.snapshots())
+
+        # Yielding the second scripted outcome is the retry: the first raised.
+        self.assertEqual(snapshot.viewers, 5)
+
+    async def test_rejected_credentials_stop_the_source_instead_of_retrying(self) -> None:
+        # Bad credentials fail every poll forever, so they must escape the poll
+        # loop rather than be warned once and retried behind a quiet log.
+        source = TwitchSource.for_login("shroud", TwitchClient(CREDS))
+        with (
+            patch(
+                "youtube_live_count_chime.twitch.TwitchClient.stream",
+                side_effect=TwitchAuthError("Twitch token request failed (HTTP 401)"),
+            ),
+            self.assertRaises(TwitchAuthError),
+        ):
+            await anext(source.snapshots())
 
 
 if __name__ == "__main__":
