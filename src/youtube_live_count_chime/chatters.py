@@ -4,6 +4,11 @@ Twitch exposes no viewer identities, so a rise in ``viewer_count`` is correlated
 with a new entry in the chat roster. That is a proxy: it misses embed and some
 mobile viewers, and includes people idling in chat. Every failure path here
 degrades to ``()`` so a missing name never costs the notification.
+
+The monitor samples this on every live poll of an authorized Twitch channel —
+not only on a rise — so each diff spans exactly one poll interval. That costs
+one Helix chatters request per poll per authorized channel (12/min per channel
+at the 5s cadence), comfortably inside the Helix budget.
 """
 
 from __future__ import annotations
@@ -79,7 +84,7 @@ class ChatterClient:
     # for permanent conditions too (the moderator:read:chatters scope was never
     # granted, or the authorized user is neither the broadcaster nor a
     # moderator), and retrying those would burn a refresh rotation on every
-    # rise — Twitch rate-limits refreshes and invalidates a redeemed refresh
+    # poll — Twitch rate-limits refreshes and invalidates a redeemed refresh
     # token, so the loop could eventually destroy the stored grant.
     _unauthorized: set[str] = field(default_factory=set)
 
@@ -157,7 +162,7 @@ class ChatterClient:
                     f"Twitch chatters request failed (HTTP {error.code})"
                 ) from error
             # A freshly refreshed token rejected again is a permanent 401, not
-            # an expiry. Remember it so no further rise retries: logged once.
+            # an expiry. Remember it so no further poll retries: logged once.
             self._unauthorized.add(token.login)
             _LOGGER.error(
                 "Twitch refuses the chat roster for %s. Run --auth %s again, "

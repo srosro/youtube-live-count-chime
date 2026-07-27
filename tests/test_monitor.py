@@ -173,7 +173,9 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             namer=RecordingNamer(),
         )
 
-        self.assertEqual(events, ["chime", "arrivals", "notify"])
+        # The baseline poll samples the roster too (the diff window is one
+        # poll); within the rising poll the chime still comes first.
+        self.assertEqual(events, ["arrivals", "chime", "arrivals", "notify"])
 
     async def test_rise_notifies_with_named_arrival_and_own_current_count(self) -> None:
         a = StreamTarget(Platform.TWITCH, "watchmepivot")
@@ -214,10 +216,12 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         title, body = posted[0]
         self.assertEqual(title, "joe_doe is now watching twitch watchmepivot")
         self.assertIn("twitch watchmepivot 2", body)
-        # The rising source's own target and the snapshot's *current* stream id:
-        # passing the previous snapshot's id would re-seed the namer forever,
-        # and passing the other source's target would name the wrong channel.
-        self.assertEqual(namer.asked, [(a, "s1")])
+        # The rising source's own target and the snapshot's *current* stream id,
+        # once per live poll: passing the previous snapshot's id would re-seed
+        # the namer forever, and passing the other source's target would name
+        # the wrong channel. (The other source's samples interleave
+        # nondeterministically, so only this target's are pinned.)
+        self.assertEqual([ask for ask in namer.asked if ask[0] == a], [(a, "s1")] * 2)
 
     async def test_fall_chimes_but_never_notifies_or_asks_for_names(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
@@ -241,9 +245,9 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(posted, [])
-        # Nobody arrives on a fall, so hoisting the roster read above the rise
-        # check would burn a Helix request — and a token rotation — per drop.
-        self.assertEqual(namer.calls, 0)
+        # The roster is still sampled on the fall — that is what keeps the diff
+        # window one poll wide — but a fall never names or notifies anyone.
+        self.assertEqual(namer.calls, 2)
 
     async def test_rise_without_a_namer_falls_back_to_a_bare_count(self) -> None:
         a = StreamTarget(Platform.YOUTUBE, "chan")
@@ -349,7 +353,46 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             "+3 watching twitch chan",
         ])
         self.assertEqual(played, [UP, UP])
-        self.assertEqual(len(logs.records), 2)
+        self.assertEqual(len(logs.records), 3)  # one per live poll, all sampled
+
+    async def test_a_chatter_who_joined_on_a_flat_poll_is_not_named_on_the_next_rise(
+        self,
+    ) -> None:
+        # The window the roster diff spans must be one poll, not "since the
+        # last rise": joe_doe is already in chat when the count rises, so he is
+        # not who arrived. Sampling only on rises would name him here.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        token = StoredToken("chan", "42", "access-placeholder", "refresh-placeholder")
+
+        class _FakeStore:
+            def get(self, login: str) -> StoredToken | None:
+                return token
+
+        class _FakeClient:
+            def __init__(self, rosters: list[frozenset[str]]) -> None:
+                self._rosters = rosters
+
+            def chatters(self, token: StoredToken) -> frozenset[str]:
+                return self._rosters.pop(0)
+
+        client = _FakeClient(
+            [
+                frozenset({"lurker"}),  # baseline poll: seeds
+                frozenset({"lurker", "joe_doe"}),  # no-change poll: joe_doe joins
+                frozenset({"lurker", "joe_doe"}),  # rising poll: nobody new
+            ]
+        )
+        posted: list[tuple[str, str]] = []
+
+        await monitor(
+            [FakeSource("twitch:chan", [live(a, 1), live(a, 1), live(a, 2)])],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            notify=lambda title, body: posted.append((title, body)),
+            namer=TwitchChatterNamer(client, _FakeStore()),
+        )
+
+        self.assertEqual([title for title, _ in posted], ["+1 watching twitch chan"])
 
 
 if __name__ == "__main__":

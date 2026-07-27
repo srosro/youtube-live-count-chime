@@ -97,7 +97,12 @@ class StreamSource(Protocol):
 
 
 class ArrivalNamer(Protocol):
-    """Names viewers who appeared on a target since the previous query."""
+    """Names viewers who appeared on a target since the previous query.
+
+    Each query advances the window, so the monitor queries once per poll —
+    querying only when it wants names would widen the window to "since the
+    last time names were wanted".
+    """
 
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
         """Return handles that arrived, or ``()`` when none are knowable."""

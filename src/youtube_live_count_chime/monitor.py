@@ -45,11 +45,32 @@ async def monitor(
     stops the watcher: an unnamed notification still posts, a failed
     notification still leaves the chime played, and neither costs the
     other channels.
+
+    The namer is sampled on *every* live snapshot and its names are consumed
+    only on a rise, so the chat-roster diff spans exactly one poll interval.
+    Sampling only on a rise would diff "since the last rise" instead, and
+    attribute a chatter who joined during a flat or falling interval to
+    whatever rise came next — the correlation the naming rests on.
     """
     chime_lock = asyncio.Lock()
     roster = Roster(tuple(source.name for source in sources))
 
     async def consume(source: StreamSource) -> None:
+        async def sample_arrivals(snapshot: StreamSnapshot) -> tuple[str, ...]:
+            """Advance the namer's roster by one poll, degrading to no names."""
+            if namer is None or snapshot.stream_id is None:
+                return ()
+            # ArrivalNamer is a public protocol, so treat it like play/notify:
+            # a name is a nice-to-have and must never cost the notification or
+            # the chime.
+            try:
+                return await namer.arrivals(snapshot.target, snapshot.stream_id)
+            except Exception as error:
+                _LOGGER.warning(
+                    "could not name arrivals for %s: %s", source.name, error
+                )
+                return ()
+
         previous: StreamSnapshot | None = None
         try:
             async for snapshot in source.snapshots():
@@ -58,15 +79,16 @@ async def monitor(
                     previous = None
                     continue
                 assert snapshot.viewers is not None  # live snapshot invariant
+                rise: int | None = None  # the delta, when this poll rose
                 if (
                     previous is not None
                     and previous.stream_id == snapshot.stream_id
                     and previous.viewers != snapshot.viewers
                 ):
                     assert previous.viewers is not None
-                    rising = snapshot.viewers > previous.viewers
-                    direction = "up" if rising else "down"
-                    sound = config.up_sound if rising else config.down_sound
+                    delta = snapshot.viewers - previous.viewers
+                    direction = "up" if delta > 0 else "down"
+                    sound = config.up_sound if delta > 0 else config.down_sound
                     print(
                         f"{source.name}: {previous.viewers} -> {snapshot.viewers} "
                         f"({direction})",
@@ -83,30 +105,19 @@ async def monitor(
                             _LOGGER.warning(
                                 "could not play chime for %s: %s", source.name, error
                             )
-                    if rising:
-                        delta = snapshot.viewers - previous.viewers
-                        names: tuple[str, ...] = ()
-                        if namer is not None:
-                            # ArrivalNamer is a public protocol, so treat it
-                            # like play/notify: a name is a nice-to-have and
-                            # must never cost the notification or the chime.
-                            try:
-                                names = await namer.arrivals(
-                                    snapshot.target, snapshot.stream_id
-                                )
-                            except Exception as error:
-                                _LOGGER.warning(
-                                    "could not name arrivals for %s: %s",
-                                    source.name,
-                                    error,
-                                )
-                        title = render_title(snapshot.target, delta, names)
-                        try:
-                            await asyncio.to_thread(notify, title, roster.render())
-                        except NotificationError as error:
-                            _LOGGER.warning(
-                                "could not notify for %s: %s", source.name, error
-                            )
+                    if delta > 0:
+                        rise = delta
+                # Sample every live poll, consume only on a rise: the diff
+                # window must be one poll interval, not "since the last rise".
+                names = await sample_arrivals(snapshot)
+                if rise is not None:
+                    title = render_title(snapshot.target, rise, names)
+                    try:
+                        await asyncio.to_thread(notify, title, roster.render())
+                    except NotificationError as error:
+                        _LOGGER.warning(
+                            "could not notify for %s: %s", source.name, error
+                        )
                 previous = snapshot
         except Exception as error:
             # Name the channel in the failure that main will report.
