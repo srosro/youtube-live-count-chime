@@ -30,6 +30,7 @@ class PostNotificationTests(unittest.TestCase):
         failures: tuple[Exception, ...] = (
             subprocess.CalledProcessError(1, "osascript", stderr="boom"),
             FileNotFoundError("osascript not found"),
+            subprocess.TimeoutExpired("osascript", 10.0),
         )
         for failure in failures:
             with self.subTest(failure=type(failure).__name__):
@@ -38,6 +39,15 @@ class PostNotificationTests(unittest.TestCase):
                 ):
                     with self.assertRaises(NotificationError):
                         post_notification("t", "b")
+
+    def test_a_wedged_osascript_is_bounded_by_a_timeout(self) -> None:
+        # A hung osascript (Notification Center wedged, a stuck TCC prompt)
+        # must not block the caller forever — subprocess.run is given a
+        # timeout, and subprocess enforces it by raising TimeoutExpired.
+        with patch("youtube_live_count_chime.notify.subprocess.run") as run:
+            post_notification("t", "b")
+
+        self.assertEqual(run.call_args.kwargs["timeout"], 10.0)
 
 
 if __name__ == "__main__":

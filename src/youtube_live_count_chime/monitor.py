@@ -77,7 +77,7 @@ async def monitor(
                         )
                         title = render_title(snapshot.target, delta, names)
                         try:
-                            notify(title, roster.render())
+                            await asyncio.to_thread(notify, title, roster.render())
                         except NotificationError as error:
                             _LOGGER.warning(
                                 "could not notify for %s: %s", source.name, error

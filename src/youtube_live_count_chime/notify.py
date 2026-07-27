@@ -35,6 +35,7 @@ def post_notification(title: str, body: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            timeout=10.0,
         )
-    except (OSError, subprocess.CalledProcessError) as error:
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         raise NotificationError(f"could not post notification: {error}") from error

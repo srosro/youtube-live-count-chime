@@ -185,9 +185,11 @@ def run_auth_flow(
 
     with server:
         deadline = time.monotonic() + _FLOW_TIMEOUT_SECONDS
-        # One handle_request() can be consumed by a preconnect or a stray
-        # favicon request without ever carrying the callback, so keep
-        # accepting requests until we see one or the overall budget expires.
+        # do_GET records path_seen for any GET, including a stray favicon
+        # request, which would end this loop and then fail state validation.
+        # Only a connection that never sends a request line at all (e.g. a
+        # bare TCP preconnect) is consumed silently, so keep accepting
+        # requests until we see one or the overall budget expires.
         while _CallbackHandler.path_seen is None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:

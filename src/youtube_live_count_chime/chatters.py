@@ -16,7 +16,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request
 
-from youtube_live_count_chime.models import StreamTarget
+from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.tokens import StoredToken, TokenStore
 from youtube_live_count_chime.twitch import (
     TOKEN_URL,
@@ -27,6 +27,9 @@ from youtube_live_count_chime.twitch import (
 
 
 CHATTERS_URL: Final = "https://api.twitch.tv/helix/chat/chatters"
+# Helix caps a chatters page at 1000 and this code does not paginate, so a
+# channel with more than 1000 chatters would see roster churn (arrivals
+# missed or falsely reported) as the returned page shifts between polls.
 _PAGE_SIZE: Final = 1000
 _LOGGER: Final = logging.getLogger(__name__)
 
@@ -145,6 +148,12 @@ class TwitchChatterNamer:
 
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
         """Return newly-seen chatters, or ``()`` when a name cannot be known."""
+        if target.platform is not Platform.TWITCH:
+            # target.name carries no platform information, so the store lookup
+            # below is a bare login — a YouTube target sharing a handle with an
+            # authorized Twitch account would otherwise be named from that
+            # account's chat roster. YouTube arrivals are never named.
+            return ()
         try:
             token = self.store.get(target.name)
             if token is None:

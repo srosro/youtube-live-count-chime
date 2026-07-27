@@ -4,7 +4,11 @@ from typing import cast
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from youtube_live_count_chime.chatters import ChatterClient, TwitchChatterNamer
+from youtube_live_count_chime.chatters import (
+    ChatterClient,
+    TwitchChatterNamer,
+    parse_chatters,
+)
 from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.tokens import StoredToken, TokenStore, TokenStoreError
 from youtube_live_count_chime.twitch import TwitchCredentials, TwitchError
@@ -44,6 +48,25 @@ class _ExplodingStore:
 
     def get(self, login: str) -> StoredToken | None:
         raise TokenStoreError("token file is corrupt")
+
+
+class ParseChattersTests(unittest.TestCase):
+    def test_well_formed_payload_yields_the_logins(self) -> None:
+        payload = {"data": [{"user_login": "joe_doe"}, {"user_login": "amy"}]}
+
+        self.assertEqual(parse_chatters(payload), frozenset({"joe_doe", "amy"}))
+
+    def test_a_non_dict_entry_is_rejected(self) -> None:
+        payload = {"data": [{"user_login": "joe_doe"}, "not-a-dict"]}
+
+        with self.assertRaises(TwitchError):
+            parse_chatters(payload)
+
+    def test_a_missing_or_empty_user_login_is_rejected(self) -> None:
+        for entry in ({"nickname": "joe_doe"}, {"user_login": ""}):
+            with self.subTest(entry=entry):
+                with self.assertRaises(TwitchError):
+                    parse_chatters({"data": [entry]})
 
 
 class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):

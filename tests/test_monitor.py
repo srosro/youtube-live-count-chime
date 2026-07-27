@@ -4,10 +4,12 @@ from collections.abc import AsyncIterator
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from youtube_live_count_chime.chatters import TwitchChatterNamer
 from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarget
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
 from youtube_live_count_chime.notify import NotificationError
 from youtube_live_count_chime.sounds import SoundPlaybackError
+from youtube_live_count_chime.tokens import StoredToken
 
 
 UP = Path("/System/Library/Sounds/Glass.aiff")
@@ -189,6 +191,51 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(posted[0][0], "+2 watching youtube chan")
+
+    async def test_a_youtube_rise_is_never_named_even_with_a_colliding_twitch_login(
+        self,
+    ) -> None:
+        # The user monitors both twitch:watchmepivot and youtube:watchmepivot.
+        # A rise on the YouTube source must never be attributed to a name
+        # pulled from the Twitch chat roster, even though the bare handle
+        # ("watchmepivot") the namer would look up collides between the two
+        # platforms. Naming is Twitch-only by design.
+        youtube_target = StreamTarget(Platform.YOUTUBE, "watchmepivot")
+        token = StoredToken("watchmepivot", "42", "access", "refresh")
+
+        class _FakeStore:
+            def get(self, login: str) -> StoredToken | None:
+                return token
+
+        class _FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chatters(self, token: StoredToken) -> frozenset[str]:
+                self.calls += 1
+                return frozenset({"joe_doe"})
+
+        client = _FakeClient()
+        namer = TwitchChatterNamer(client, _FakeStore())
+        posted: list[tuple[str, str]] = []
+
+        await monitor(
+            [
+                FakeSource(
+                    "youtube:watchmepivot",
+                    [live(youtube_target, 1), live(youtube_target, 2)],
+                )
+            ],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            notify=lambda title, body: posted.append((title, body)),
+            namer=namer,
+        )
+
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(posted[0][0], "+1 watching youtube watchmepivot")
+        # The Twitch chat roster must never even be queried for a YouTube rise.
+        self.assertEqual(client.calls, 0)
 
     async def test_a_notification_failure_does_not_stop_the_watcher(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")

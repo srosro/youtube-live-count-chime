@@ -40,6 +40,16 @@ class RenderTitleTests(unittest.TestCase):
                 "joe_doe, pixel are now watching twitch watchmepivot",
             ),
             (
+                ["a", "b", "c"],
+                3,
+                "a, b, c are now watching twitch watchmepivot",
+            ),
+            (
+                ["a", "b", "c", "d"],
+                4,
+                "a, b, c and 1 more are now watching twitch watchmepivot",
+            ),
+            (
                 ["a", "b", "c", "d", "e"],
                 5,
                 "a, b, c and 2 more are now watching twitch watchmepivot",
