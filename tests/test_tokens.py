@@ -2,6 +2,8 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest.mock import patch
+import json
 
 from youtube_live_count_chime.tokens import StoredToken, TokenStore, TokenStoreError
 
@@ -60,16 +62,30 @@ class TokenStoreTests(unittest.TestCase):
 
     def test_existing_loose_file_is_tightened_before_writing(self) -> None:
         # Regression test: if tokens.json exists at 0644 (e.g., from an older
-        # version), save() must narrow the mode to 0600 BEFORE writing secrets,
-        # not after. Otherwise the secrets are briefly world-readable.
+        # version), save() must narrow the mode to 0600 BEFORE json.dump writes
+        # the secrets, not after. Otherwise the secrets are briefly world-readable.
         self.path.write_text("{}", encoding="utf-8")
         self.path.chmod(0o644)
 
-        store = TokenStore(self.path)
-        store.save(_token("watchmepivot"))
+        mode_at_write: list[int] = []
 
-        mode = stat.S_IMODE(self.path.stat().st_mode)
-        self.assertEqual(mode, 0o600)
+        # Patch json.dump to record the file mode when it is called (during the
+        # write). This captures whether the file is already secured before secrets
+        # are actually written to disk.
+        original_dump = json.dump
+
+        def recording_dump(obj: object, fp: object, **kwargs: object) -> None:
+            mode_at_write.append(stat.S_IMODE(self.path.stat().st_mode))
+            return original_dump(obj, fp, **kwargs)  # type: ignore
+
+        with patch("youtube_live_count_chime.tokens.json.dump", side_effect=recording_dump):
+            store = TokenStore(self.path)
+            store.save(_token("watchmepivot"))
+
+        self.assertEqual(len(mode_at_write), 1, "json.dump should be called exactly once")
+        self.assertEqual(
+            mode_at_write[0], 0o600, "file mode must be 0600 when secrets are written"
+        )
 
 
 if __name__ == "__main__":
