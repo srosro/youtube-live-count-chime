@@ -112,6 +112,32 @@ at all.)
 
 Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 
+## Naming who started watching (Twitch only)
+
+A rise in the viewer count posts a macOS notification. It names the arrival when
+the channel's chat roster reveals one.
+
+Neither Twitch nor YouTube exposes viewer identities, so a name is inferred by
+correlating a viewer-count rise with a new entry in the chat roster. Watchers who
+never open chat are not named, and YouTube arrivals are never named — those
+notifications degrade to `+N watching youtube <handle>`.
+
+### One-time setup
+
+1. At <https://dev.twitch.tv/console>, add `http://localhost:8419` to your
+   application's **OAuth Redirect URLs**.
+2. Authorize each account you broadcast from:
+
+   ```sh
+   youtube-live-count-chime --auth watchmepivot
+   youtube-live-count-chime --auth samtriestobuild
+   ```
+
+   Each run opens a browser once. Tokens are stored in
+   `~/.config/count-chime/tokens.json` at mode `0600` and refresh automatically.
+
+Channels without a stored token still notify — just without a name.
+
 ## Run at login (macOS)
 
 To keep the watcher running automatically, install it as a launchd

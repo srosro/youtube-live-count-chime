@@ -10,8 +10,11 @@ from pathlib import Path
 import sys
 from typing import Final, Sequence, cast
 
-from youtube_live_count_chime.models import StreamSource
+from youtube_live_count_chime.auth import AuthError, run_auth_flow
+from youtube_live_count_chime.chatters import ChatterClient, TwitchChatterNamer
+from youtube_live_count_chime.models import ArrivalNamer, StreamSource
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
+from youtube_live_count_chime.tokens import TokenStore
 from youtube_live_count_chime.twitch import (
     TwitchClient,
     TwitchCredentials,
@@ -35,6 +38,7 @@ class Config:
     up_sound: Path
     down_sound: Path
     check: bool
+    auth: str | None
 
 
 def _sound_file(value: str) -> Path:
@@ -85,6 +89,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate flags, handles, and that Twitch credentials are set, then exit",
     )
+    parser.add_argument(
+        "--auth",
+        metavar="LOGIN",
+        default=None,
+        help=(
+            "authorize one Twitch account in the browser so arrivals can be named, "
+            "then exit (run once per account)"
+        ),
+    )
     return parser
 
 
@@ -97,6 +110,7 @@ def parse_config(argv: Sequence[str] | None = None) -> Config:
         up_sound=cast(Path, namespace.up_sound),
         down_sound=cast(Path, namespace.down_sound),
         check=cast(bool, namespace.check),
+        auth=cast("str | None", namespace.auth),
     )
 
 
@@ -128,10 +142,31 @@ def build_sources(config: Config) -> list[StreamSource]:
     return sources
 
 
+def build_namer(config: Config) -> ArrivalNamer | None:
+    """Build the chat-roster namer, or ``None`` when no Twitch channel is watched."""
+    if not config.twitch:
+        return None
+    store = TokenStore()
+    return TwitchChatterNamer(ChatterClient(TwitchCredentials.from_env(), store), store)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse arguments, build sources, and watch every channel until interrupted."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     config = parse_config(argv)
+
+    if config.auth is not None:
+        try:
+            token = run_auth_flow(config.auth, TwitchCredentials.from_env(), TokenStore())
+        except (AuthError, TwitchError, ValueError) as error:
+            print(f"Error: {error}", file=sys.stderr, flush=True)
+            return 2
+        print(
+            f"Authorized {token.login}. Arrivals on that channel can now be named.",
+            flush=True,
+        )
+        return 0
+
     try:
         sources = build_sources(config)
     except (ValueError, TwitchError) as error:
@@ -146,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     names = ", ".join(source.name for source in sources)
     print(f"Monitoring {names}. Press Ctrl-C to stop.", flush=True)
     try:
-        asyncio.run(monitor(sources, chime))
+        asyncio.run(monitor(sources, chime, namer=build_namer(config)))
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
     except Exception as error:

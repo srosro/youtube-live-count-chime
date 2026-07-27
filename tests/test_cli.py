@@ -7,9 +7,11 @@ from typing import Any, Sequence
 import unittest
 from unittest.mock import patch
 
+from youtube_live_count_chime.auth import AuthError
 from youtube_live_count_chime.cli import build_sources, main, parse_config
 from youtube_live_count_chime.monitor import ChimeConfig
-from youtube_live_count_chime.models import StreamSource
+from youtube_live_count_chime.models import ArrivalNamer, StreamSource
+from youtube_live_count_chime.tokens import StoredToken
 from youtube_live_count_chime.twitch import TwitchError, TwitchSource
 
 
@@ -151,7 +153,10 @@ class MainTests(_CliTestCase):
 
     def test_keyboard_interrupt_stops_cleanly(self) -> None:
         async def fake_monitor(
-            sources: Sequence[StreamSource], config: ChimeConfig
+            sources: Sequence[StreamSource],
+            config: ChimeConfig,
+            *,
+            namer: ArrivalNamer | None = None,
         ) -> None:
             raise KeyboardInterrupt
 
@@ -159,7 +164,12 @@ class MainTests(_CliTestCase):
             self.assertEqual(main(self.argv("-y", "@mkbhd")), 0)
 
     def test_unexpected_error_exits_1(self) -> None:
-        async def boom(sources: Sequence[StreamSource], config: ChimeConfig) -> None:
+        async def boom(
+            sources: Sequence[StreamSource],
+            config: ChimeConfig,
+            *,
+            namer: ArrivalNamer | None = None,
+        ) -> None:
             raise RuntimeError("kaboom")
 
         with patch("youtube_live_count_chime.cli.monitor", boom):
@@ -170,7 +180,10 @@ class MainTests(_CliTestCase):
         captured: dict[str, Any] = {}
 
         async def fake_monitor(
-            sources: Sequence[StreamSource], config: ChimeConfig
+            sources: Sequence[StreamSource],
+            config: ChimeConfig,
+            *,
+            namer: ArrivalNamer | None = None,
         ) -> None:
             captured["names"] = [source.name for source in sources]
             captured["config"] = config
@@ -181,6 +194,78 @@ class MainTests(_CliTestCase):
         self.assertEqual(captured["names"], ["youtube:mkbhd"])
         self.assertEqual(captured["config"].up_sound.name, "up.aiff")
         self.assertEqual(captured["config"].down_sound.name, "down.aiff")
+
+
+class AuthFlagTests(unittest.TestCase):
+    def test_auth_flag_parses_a_login(self) -> None:
+        config = parse_config(["--auth", "watchmepivot"])
+
+        self.assertEqual(config.auth, "watchmepivot")
+
+    def test_auth_defaults_to_none(self) -> None:
+        config = parse_config(["-t", "shroud"])
+
+        self.assertIsNone(config.auth)
+
+    def test_auth_does_not_require_a_channel(self) -> None:
+        # Authorizing is a setup step; it runs before any channel is configured.
+        config = parse_config(["--auth", "watchmepivot"])
+
+        self.assertEqual(config.youtube, ())
+        self.assertEqual(config.twitch, ())
+
+    def test_auth_runs_before_channel_validation(self) -> None:
+        # --auth must be handled before build_sources, so a first-time setup
+        # can authorize without configuring any channel yet.
+        captured: dict[str, object] = {}
+
+        def fake_run_auth_flow(
+            login: str, credentials: object, store: object, **kwargs: object
+        ) -> StoredToken:
+            captured["login"] = login
+            return StoredToken(login, "123", "access", "refresh")
+
+        env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("youtube_live_count_chime.cli.run_auth_flow", fake_run_auth_flow),
+        ):
+            exit_code = main(["--auth", "watchmepivot"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured["login"], "watchmepivot")
+
+    def test_auth_error_prints_clean_message_and_exits_2(self) -> None:
+        def fake_run_auth_flow(
+            login: str, credentials: object, store: object, **kwargs: object
+        ) -> StoredToken:
+            raise AuthError("authorization was refused")
+
+        env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
+        stderr = StringIO()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("youtube_live_count_chime.cli.run_auth_flow", fake_run_auth_flow),
+            redirect_stderr(stderr),
+        ):
+            exit_code = main(["--auth", "watchmepivot"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("Error: authorization was refused", stderr.getvalue())
+
+    def test_malformed_auth_handle_exits_cleanly(self) -> None:
+        # normalize_handle (called inside run_auth_flow, before it opens a
+        # browser or binds a port) raises ValueError on a URL-unsafe handle;
+        # main must not let that escape as a traceback. Real credentials are
+        # supplied so the flow reaches normalize_handle deterministically
+        # rather than failing earlier on TwitchCredentials.from_env().
+        env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
+        stderr = StringIO()
+        with patch.dict(os.environ, env, clear=True), redirect_stderr(stderr):
+            exit_code = main(["--auth", "bad login!"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(stderr.getvalue().startswith("Error: "))
 
 
 if __name__ == "__main__":
