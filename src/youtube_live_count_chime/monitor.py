@@ -9,7 +9,9 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from youtube_live_count_chime.models import StreamSnapshot, StreamSource
+from youtube_live_count_chime.digest import Roster, render_title
+from youtube_live_count_chime.models import ArrivalNamer, StreamSnapshot, StreamSource
+from youtube_live_count_chime.notify import NotificationError, post_notification
 from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
 
 
@@ -29,22 +31,30 @@ async def monitor(
     config: ChimeConfig,
     *,
     play: Callable[[Path], None] = play_sound,
+    notify: Callable[[str, str], None] = post_notification,
+    namer: ArrivalNamer | None = None,
 ) -> None:
-    """Watch every source concurrently, chiming once per viewer-count change.
+    """Watch every source concurrently, chiming and notifying on count changes.
 
-    Each source has one consumer that keeps the previous live snapshot and
-    chimes when the same stream's count moves. A playback failure (e.g. the
-    output device switching mid-chime) is warned and skipped so one channel's
-    audio glitch never stops the watcher. Any other exception escaping a
-    source is an unexpected bug: the TaskGroup cancels the siblings and
-    ``main`` reports it (named with the channel) and exits non-zero.
+    A rise also posts a macOS notification naming the arrival when the chat
+    roster reveals it. The roster of current counts is shared across consumers
+    so every notification carries the same fixed-shape digest. Playback and
+    notification failures are warned and skipped so one channel's glitch never
+    stops the watcher.
     """
     chime_lock = asyncio.Lock()
+    roster = Roster(tuple(source.name for source in sources))
 
     async def consume(source: StreamSource) -> None:
         previous: StreamSnapshot | None = None
         try:
             async for snapshot in source.snapshots():
+                roster.update(source.name, snapshot.viewers)
+                # Yield to sibling consumers so a source with no real I/O
+                # (or one that outruns another) can't fire a notification
+                # before every other source has recorded its own latest
+                # count into the shared roster.
+                await asyncio.sleep(0)
                 if snapshot.stream_id is None:
                     previous = None
                     continue
@@ -63,6 +73,20 @@ async def monitor(
                         f"({direction})",
                         flush=True,
                     )
+                    if rising:
+                        delta = snapshot.viewers - previous.viewers
+                        names = (
+                            await namer.arrivals(snapshot.target, snapshot.stream_id)
+                            if namer is not None
+                            else ()
+                        )
+                        title = render_title(snapshot.target, delta, names)
+                        try:
+                            notify(title, roster.render())
+                        except NotificationError as error:
+                            _LOGGER.warning(
+                                "could not notify for %s: %s", source.name, error
+                            )
                     async with chime_lock:
                         try:
                             await asyncio.to_thread(play, sound)

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarget
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
+from youtube_live_count_chime.notify import NotificationError
 from youtube_live_count_chime.sounds import SoundPlaybackError
 
 
@@ -130,6 +131,74 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("source channel-x failed", messages)
         causes = [type(error.__cause__) for error in ctx.exception.exceptions]
         self.assertIn(RuntimeError, causes)
+
+
+class NotificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rise_notifies_with_named_arrival_and_full_roster(self) -> None:
+        a = StreamTarget(Platform.TWITCH, "watchmepivot")
+        b = StreamTarget(Platform.YOUTUBE, "srosrosr")
+        posted: list[tuple[str, str]] = []
+
+        class Namer:
+            async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
+                return ("joe_doe",)
+
+        await monitor(
+            [
+                FakeSource("twitch:watchmepivot", [live(a, 1), live(a, 2)]),
+                FakeSource("youtube:srosrosr", [live(b, 7)]),
+            ],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            notify=lambda title, body: posted.append((title, body)),
+            namer=Namer(),
+        )
+
+        self.assertEqual(len(posted), 1)
+        title, body = posted[0]
+        self.assertEqual(title, "joe_doe is now watching twitch watchmepivot")
+        self.assertIn("twitch watchmepivot 2", body)
+        self.assertIn("youtube srosrosr 7", body)
+
+    async def test_fall_chimes_but_never_notifies(self) -> None:
+        a = StreamTarget(Platform.TWITCH, "chan")
+        posted: list[tuple[str, str]] = []
+        await monitor(
+            [FakeSource("twitch:chan", [live(a, 5), live(a, 2)])],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            notify=lambda title, body: posted.append((title, body)),
+        )
+
+        self.assertEqual(posted, [])
+
+    async def test_rise_without_a_namer_falls_back_to_a_bare_count(self) -> None:
+        a = StreamTarget(Platform.YOUTUBE, "chan")
+        posted: list[tuple[str, str]] = []
+        await monitor(
+            [FakeSource("youtube:chan", [live(a, 1), live(a, 3)])],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            notify=lambda title, body: posted.append((title, body)),
+        )
+
+        self.assertEqual(posted[0][0], "+2 watching youtube chan")
+
+    async def test_a_notification_failure_does_not_stop_the_watcher(self) -> None:
+        a = StreamTarget(Platform.TWITCH, "chan")
+        played: list[Path] = []
+
+        def explode(title: str, body: str) -> None:
+            raise NotificationError("banner refused")
+
+        await monitor(
+            [FakeSource("twitch:chan", [live(a, 1), live(a, 2), live(a, 5)])],
+            ChimeConfig(UP, DOWN),
+            play=played.append,
+            notify=explode,
+        )
+
+        self.assertEqual(played, [UP, UP])  # both rises still chimed
 
 
 if __name__ == "__main__":
