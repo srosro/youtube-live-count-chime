@@ -36,7 +36,8 @@ class TwitchError(RuntimeError):
     """Raised when a Twitch credential or response cannot be used."""
 
 
-def _object_dict(value: object) -> dict[str, object] | None:
+def object_dict(value: object) -> dict[str, object] | None:
+    """Return a JSON payload as a dict, or ``None`` when it was not an object."""
     if not isinstance(value, dict):
         return None
     return cast(dict[str, object], value)
@@ -69,7 +70,7 @@ class TwitchCredentials:
 
 def parse_app_token(payload: object) -> str:
     """Validate a client-credentials token response and return its access token."""
-    value = _object_dict(payload)
+    value = object_dict(payload)
     token = value.get("access_token") if value is not None else None
     if not isinstance(token, str) or not token:
         raise TwitchError("invalid Twitch token response")
@@ -78,7 +79,7 @@ def parse_app_token(payload: object) -> str:
 
 def parse_stream(payload: object, target: StreamTarget) -> StreamSnapshot:
     """Turn one Helix streams response for a login into a snapshot."""
-    value = _object_dict(payload)
+    value = object_dict(payload)
     data = value.get("data") if value is not None else None
     if not isinstance(data, list):
         raise TwitchError("invalid Twitch streams response")
@@ -86,7 +87,7 @@ def parse_stream(payload: object, target: StreamTarget) -> StreamSnapshot:
     if not data:
         return StreamSnapshot.offline(target)
 
-    entry = _object_dict(cast(list[object], data)[0])
+    entry = object_dict(cast(list[object], data)[0])
     stream_id = entry.get("id") if entry is not None else None
     viewers = _strict_int(entry.get("viewer_count")) if entry is not None else None
     if not isinstance(stream_id, str) or not stream_id or viewers is None or viewers < 0:

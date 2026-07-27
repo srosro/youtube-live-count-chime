@@ -47,13 +47,20 @@ class Roster:
 
 
 def render_title(target: StreamTarget, delta: int, names: Sequence[str]) -> str:
-    """Render the arrival line, degrading to a bare count when no name is known."""
+    """Render the arrival line, reconciling the named chatters with the rise.
+
+    The chat roster is a lossy proxy for the viewer count, so ``names`` and
+    ``delta`` routinely disagree. ``delta`` is authoritative for how many
+    people arrived, so the title never names more than that many, and any
+    arrival the roster could not name is carried by "and N more".
+    """
     where = _display(target.key)
-    if not names:
+    listed = tuple(names[: min(MAX_NAMES, delta)])
+    if not listed:
         return f"+{delta} watching {where}"
-    if len(names) == 1:
-        return f"{names[0]} is now watching {where}"
-    if len(names) <= MAX_NAMES:
-        return f"{', '.join(names)} are now watching {where}"
-    listed = ", ".join(names[:MAX_NAMES])
-    return f"{listed} and {len(names) - MAX_NAMES} more are now watching {where}"
+    unnamed = delta - len(listed)
+    if unnamed > 0:
+        return f"{', '.join(listed)} and {unnamed} more are now watching {where}"
+    if len(listed) == 1:
+        return f"{listed[0]} is now watching {where}"
+    return f"{', '.join(listed)} are now watching {where}"

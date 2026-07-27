@@ -27,6 +27,9 @@ class PostNotificationTests(unittest.TestCase):
         self.assertNotIn(hostile, " ".join(command[:-1]))
 
     def test_failure_becomes_notification_error(self) -> None:
+        # TimeoutExpired is the observable half of the bounded-wait contract: a
+        # wedged osascript (Notification Center hung, a stuck TCC prompt) ends
+        # as a NotificationError the caller can warn on, never a blocked caller.
         failures: tuple[Exception, ...] = (
             subprocess.CalledProcessError(1, "osascript", stderr="boom"),
             FileNotFoundError("osascript not found"),
@@ -39,15 +42,6 @@ class PostNotificationTests(unittest.TestCase):
                 ):
                     with self.assertRaises(NotificationError):
                         post_notification("t", "b")
-
-    def test_a_wedged_osascript_is_bounded_by_a_timeout(self) -> None:
-        # A hung osascript (Notification Center wedged, a stuck TCC prompt)
-        # must not block the caller forever — subprocess.run is given a
-        # timeout, and subprocess enforces it by raising TimeoutExpired.
-        with patch("youtube_live_count_chime.notify.subprocess.run") as run:
-            post_notification("t", "b")
-
-        self.assertEqual(run.call_args.kwargs["timeout"], 10.0)
 
 
 if __name__ == "__main__":

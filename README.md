@@ -124,8 +124,11 @@ notifications degrade to `+N watching youtube <handle>`.
 
 ### One-time setup
 
-1. At <https://dev.twitch.tv/console>, add `http://localhost:8419` to your
-   application's **OAuth Redirect URLs**.
+1. At <https://dev.twitch.tv/console>, add `http://127.0.0.1:8419` to your
+   application's **OAuth Redirect URLs**. Enter it exactly — Twitch compares the
+   redirect URL byte-for-byte during the code exchange, and `localhost` is a
+   different string (it can also resolve to `::1`, which the callback server,
+   bound to IPv4 loopback, never answers).
 2. Authorize each account you broadcast from:
 
    ```sh

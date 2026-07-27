@@ -142,12 +142,18 @@ def build_sources(config: Config) -> list[StreamSource]:
     return sources
 
 
-def build_namer(config: Config) -> ArrivalNamer | None:
-    """Build the chat-roster namer, or ``None`` when no Twitch channel is watched."""
-    if not config.twitch:
+def build_namer(sources: Sequence[StreamSource]) -> ArrivalNamer | None:
+    """Build the chat-roster namer, or ``None`` when no Twitch channel is watched.
+
+    Derived from the sources build_sources already produced, so the credentials
+    are read from the environment once and "is this a Twitch run?" is decided
+    in one place.
+    """
+    twitch = [source for source in sources if isinstance(source, TwitchSource)]
+    if not twitch:
         return None
     store = TokenStore()
-    return TwitchChatterNamer(ChatterClient(TwitchCredentials.from_env(), store), store)
+    return TwitchChatterNamer(ChatterClient(twitch[0].client.credentials, store), store)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -181,7 +187,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     names = ", ".join(source.name for source in sources)
     print(f"Monitoring {names}. Press Ctrl-C to stop.", flush=True)
     try:
-        asyncio.run(monitor(sources, chime, namer=build_namer(config)))
+        asyncio.run(monitor(sources, chime, namer=build_namer(sources)))
     except KeyboardInterrupt:
         print("\nStopped.", flush=True)
     except Exception as error:

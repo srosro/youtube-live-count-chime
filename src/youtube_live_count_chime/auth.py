@@ -1,7 +1,9 @@
 """One-time browser OAuth to obtain a per-account Twitch user token.
 
-Requires ``http://localhost:8419`` to be registered as an OAuth Redirect URL on
-the Twitch application at dev.twitch.tv/console.
+Requires ``http://127.0.0.1:8419`` to be registered as an OAuth Redirect URL on
+the Twitch application at dev.twitch.tv/console. It must be the literal loopback
+address, not ``localhost``: the callback server binds IPv4 loopback only, and
+the same string is sent in the code exchange, where Twitch compares it verbatim.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request
 import webbrowser
 
+from youtube_live_count_chime.chatters import CHATTERS_SCOPE
 from youtube_live_count_chime.models import normalize_handle
 from youtube_live_count_chime.tokens import StoredToken, TokenStore
 from youtube_live_count_chime.twitch import (
@@ -23,14 +26,16 @@ from youtube_live_count_chime.twitch import (
     TwitchCredentials,
     TwitchError,
     get_json,
+    object_dict,
 )
 
 
 AUTHORIZE_URL: Final = "https://id.twitch.tv/oauth2/authorize"
 USERS_URL: Final = "https://api.twitch.tv/helix/users"
+REDIRECT_HOST: Final = "127.0.0.1"
 REDIRECT_PORT: Final = 8419
-REDIRECT_URI: Final = f"http://localhost:{REDIRECT_PORT}"
-SCOPE: Final = "moderator:read:chatters"
+REDIRECT_URI: Final = f"http://{REDIRECT_HOST}:{REDIRECT_PORT}"
+SCOPE: Final = CHATTERS_SCOPE
 # Overall budget for the whole wait (covers preconnects/favicon probes that eat
 # a request without carrying the callback); per-socket-read budget below it so
 # one silent connection can't consume the whole window.
@@ -72,7 +77,9 @@ def parse_callback(path: str, expected_state: str) -> str:
 
 def parse_token_response(payload: object) -> tuple[str, str]:
     """Validate a code-exchange response and return (access_token, refresh_token)."""
-    fields = cast("dict[str, object]", payload if isinstance(payload, dict) else {})
+    fields = object_dict(payload)
+    if fields is None:
+        raise AuthError("Twitch returned a malformed token response")
     access = fields.get("access_token")
     refresh = fields.get("refresh_token")
     if not isinstance(access, str) or not access:
@@ -84,11 +91,15 @@ def parse_token_response(payload: object) -> tuple[str, str]:
 
 def parse_identity(payload: object) -> tuple[str, str]:
     """Validate a users-endpoint response and return (login, user_id)."""
-    fields = cast("dict[str, object]", payload if isinstance(payload, dict) else {})
+    fields = object_dict(payload)
+    if fields is None:
+        raise AuthError("Twitch returned a malformed user response")
     data = fields.get("data")
     if not isinstance(data, list) or not data:
         raise AuthError("Twitch returned no user for this token")
-    entry = cast("dict[str, object]", cast("list[object]", data)[0])
+    entry = object_dict(cast("list[object]", data)[0])
+    if entry is None:
+        raise AuthError("Twitch returned a malformed user")
     login = entry.get("login")
     user_id = entry.get("id")
     if not isinstance(login, str) or not isinstance(user_id, str):
@@ -177,7 +188,7 @@ def run_auth_flow(
     open_browser(url)
 
     try:
-        server = HTTPServer(("127.0.0.1", REDIRECT_PORT), _CallbackHandler)
+        server = HTTPServer((REDIRECT_HOST, REDIRECT_PORT), _CallbackHandler)
     except OSError as error:
         raise AuthError(
             f"could not bind to port {REDIRECT_PORT} (already in use?)"

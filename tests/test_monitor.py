@@ -142,8 +142,16 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         posted: list[tuple[str, str]] = []
 
         class Namer:
+            """Names only the rising target's *current* stream, nothing else."""
+
+            def __init__(self) -> None:
+                self.asked: list[tuple[StreamTarget, str]] = []
+
             async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
+                self.asked.append((target, stream_id))
                 return ("joe_doe",)
+
+        namer = Namer()
 
         # The other source (b) is present to exercise the multi-source shape
         # of Roster construction, but its own rendered count depends on
@@ -160,25 +168,43 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
             notify=lambda title, body: posted.append((title, body)),
-            namer=Namer(),
+            namer=namer,
         )
 
         self.assertEqual(len(posted), 1)
         title, body = posted[0]
         self.assertEqual(title, "joe_doe is now watching twitch watchmepivot")
         self.assertIn("twitch watchmepivot 2", body)
+        # The rising source's own target and the snapshot's *current* stream id:
+        # passing the previous snapshot's id would re-seed the namer forever,
+        # and passing the other source's target would name the wrong channel.
+        self.assertEqual(namer.asked, [(a, "s1")])
 
-    async def test_fall_chimes_but_never_notifies(self) -> None:
+    async def test_fall_chimes_but_never_notifies_or_asks_for_names(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
+
+        class Namer:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
+                self.calls += 1
+                return ()
+
+        namer = Namer()
         await monitor(
             [FakeSource("twitch:chan", [live(a, 5), live(a, 2)])],
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
             notify=lambda title, body: posted.append((title, body)),
+            namer=namer,
         )
 
         self.assertEqual(posted, [])
+        # Nobody arrives on a fall, so hoisting the roster read above the rise
+        # check would burn a Helix request — and a token rotation — per drop.
+        self.assertEqual(namer.calls, 0)
 
     async def test_rise_without_a_namer_falls_back_to_a_bare_count(self) -> None:
         a = StreamTarget(Platform.YOUTUBE, "chan")
@@ -244,14 +270,47 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         def explode(title: str, body: str) -> None:
             raise NotificationError("banner refused")
 
-        await monitor(
-            [FakeSource("twitch:chan", [live(a, 1), live(a, 2), live(a, 5)])],
-            ChimeConfig(UP, DOWN),
-            play=played.append,
-            notify=explode,
-        )
+        # The warning is the operator's only signal that banners are broken.
+        with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
+            await monitor(
+                [FakeSource("twitch:chan", [live(a, 1), live(a, 2), live(a, 5)])],
+                ChimeConfig(UP, DOWN),
+                play=played.append,
+                notify=explode,
+            )
 
         self.assertEqual(played, [UP, UP])  # both rises still chimed
+        self.assertEqual(len(logs.records), 2)  # each failure warned
+
+    async def test_a_namer_failure_still_notifies_unnamed_and_keeps_watching(
+        self,
+    ) -> None:
+        # ArrivalNamer is a public protocol, so monitor must not trust it: a
+        # bug in someone's namer must cost the name, not the notification, the
+        # chime, or the other channels.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        posted: list[tuple[str, str]] = []
+        played: list[Path] = []
+
+        class BuggyNamer:
+            async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
+                raise AttributeError("namer bug")
+
+        with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
+            await monitor(
+                [FakeSource("twitch:chan", [live(a, 1), live(a, 2), live(a, 5)])],
+                ChimeConfig(UP, DOWN),
+                play=played.append,
+                notify=lambda title, body: posted.append((title, body)),
+                namer=BuggyNamer(),
+            )
+
+        self.assertEqual([title for title, _ in posted], [
+            "+1 watching twitch chan",
+            "+3 watching twitch chan",
+        ])
+        self.assertEqual(played, [UP, UP])
+        self.assertEqual(len(logs.records), 2)
 
 
 if __name__ == "__main__":

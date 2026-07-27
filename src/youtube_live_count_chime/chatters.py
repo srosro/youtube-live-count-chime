@@ -9,7 +9,7 @@ degrades to ``()`` so a missing name never costs the notification.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 from typing import Final, Protocol, cast
 from urllib.error import HTTPError
@@ -17,16 +17,19 @@ from urllib.parse import urlencode
 from urllib.request import Request
 
 from youtube_live_count_chime.models import Platform, StreamTarget
-from youtube_live_count_chime.tokens import StoredToken, TokenStore
+from youtube_live_count_chime.tokens import StoredToken, TokenStoreError
 from youtube_live_count_chime.twitch import (
     TOKEN_URL,
     TwitchCredentials,
     TwitchError,
     get_json,
+    object_dict,
 )
 
 
 CHATTERS_URL: Final = "https://api.twitch.tv/helix/chat/chatters"
+# The Helix scope this endpoint requires; auth.py requests exactly this one.
+CHATTERS_SCOPE: Final = "moderator:read:chatters"
 # Helix caps a chatters page at 1000 and this code does not paginate, so a
 # channel with more than 1000 chatters would see roster churn (arrivals
 # missed or falsely reported) as the returned page shifts between polls.
@@ -42,18 +45,23 @@ class _TokenLookup(Protocol):
     def get(self, login: str) -> StoredToken | None: ...
 
 
+class _TokenSaver(Protocol):
+    def save(self, token: StoredToken) -> None: ...
+
+
 def parse_chatters(payload: object) -> frozenset[str]:
     """Extract chatter logins from a Helix chatters response."""
-    value = payload if isinstance(payload, dict) else None
-    data = cast("dict[str, object]", value).get("data") if value is not None else None
+    value = object_dict(payload)
+    data = value.get("data") if value is not None else None
     if not isinstance(data, list):
         raise TwitchError("invalid Twitch chatters response")
 
     logins: set[str] = set()
-    for entry in cast("list[object]", data):
-        if not isinstance(entry, dict):
+    for item in cast("list[object]", data):
+        entry = object_dict(item)
+        if entry is None:
             raise TwitchError("invalid Twitch chatter entry")
-        login = cast("dict[str, object]", entry).get("user_login")
+        login = entry.get("user_login")
         if not isinstance(login, str) or not login:
             raise TwitchError("invalid Twitch chatter entry")
         logins.add(login)
@@ -65,7 +73,14 @@ class ChatterClient:
     """Read a channel's chat roster with its broadcaster's user token."""
 
     credentials: TwitchCredentials
-    store: TokenStore
+    store: _TokenSaver
+    # Logins whose token was still rejected after a refresh. Helix answers 401
+    # for permanent conditions too (the moderator:read:chatters scope was never
+    # granted, or the authorized user is neither the broadcaster nor a
+    # moderator), and retrying those would burn a refresh rotation on every
+    # rise — Twitch rate-limits refreshes and invalidates a redeemed refresh
+    # token, so the loop could eventually destroy the stored grant.
+    _unauthorized: set[str] = field(default_factory=set)
 
     def _request(self, token: StoredToken) -> frozenset[str]:
         # The broadcaster reading their own channel: moderator_id == broadcaster_id.
@@ -103,8 +118,9 @@ class ChatterClient:
             payload = get_json(request)
         except HTTPError as error:
             raise TwitchError(f"token refresh failed (HTTP {error.code})") from error
-        value = payload if isinstance(payload, dict) else {}
-        fields = cast("dict[str, object]", value)
+        fields = object_dict(payload)
+        if fields is None:
+            raise TwitchError("invalid Twitch refresh response")
         access = fields.get("access_token")
         refresh = fields.get("refresh_token")
         if not isinstance(access, str) or not access:
@@ -118,8 +134,13 @@ class ChatterClient:
         self.store.save(rotated)
         return rotated
 
+    def _unauthorized_error(self, login: str) -> TwitchError:
+        return TwitchError(f"{login} is not authorized to read its own chat roster")
+
     def chatters(self, token: StoredToken) -> frozenset[str]:
         """Return the chat roster, refreshing the user token once after HTTP 401."""
+        if token.login in self._unauthorized:
+            raise self._unauthorized_error(token.login)
         try:
             return self._request(token)
         except HTTPError as error:
@@ -130,9 +151,23 @@ class ChatterClient:
         try:
             return self._request(self._refresh(token))
         except HTTPError as error:
-            raise TwitchError(
-                f"Twitch chatters request failed (HTTP {error.code})"
-            ) from error
+            if error.code != 401:
+                raise TwitchError(
+                    f"Twitch chatters request failed (HTTP {error.code})"
+                ) from error
+            # A freshly refreshed token rejected again is a permanent 401, not
+            # an expiry. Remember it so no further rise retries: logged once.
+            self._unauthorized.add(token.login)
+            _LOGGER.error(
+                "Twitch refuses the chat roster for %s. Run --auth %s again, "
+                "signed in as an account that is the broadcaster or one of its "
+                "moderators, to grant the %s scope. Arrivals on that channel "
+                "will not be named until then.",
+                token.login,
+                token.login,
+                CHATTERS_SCOPE,
+            )
+            raise self._unauthorized_error(token.login) from error
 
 
 class TwitchChatterNamer:
@@ -154,12 +189,19 @@ class TwitchChatterNamer:
             # authorized Twitch account would otherwise be named from that
             # account's chat roster. YouTube arrivals are never named.
             return ()
+        # Only the two expected degradations are absorbed: anything else is a
+        # bug, and must reach the monitor's boundary handler rather than being
+        # swallowed as "no names" on every rise forever.
         try:
             token = self.store.get(target.name)
-            if token is None:
-                return ()
+        except TokenStoreError as error:
+            _LOGGER.warning("could not read the token store for %s: %s", target.key, error)
+            return ()
+        if token is None:
+            return ()
+        try:
             current = await asyncio.to_thread(self.client.chatters, token)
-        except Exception as error:
+        except TwitchError as error:
             _LOGGER.warning("could not read chat roster for %s: %s", target.key, error)
             return ()
 

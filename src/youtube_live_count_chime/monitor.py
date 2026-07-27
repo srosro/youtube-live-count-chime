@@ -38,9 +38,10 @@ async def monitor(
 
     A rise also posts a macOS notification naming the arrival when the chat
     roster reveals it. The roster of current counts is shared across consumers
-    so every notification carries the same fixed-shape digest. Playback and
-    notification failures are warned and skipped so one channel's glitch never
-    stops the watcher.
+    so every notification carries the same fixed-shape digest. Naming,
+    playback, and notification failures are each warned and skipped so one
+    channel's glitch never stops the watcher: an unnamed notification still
+    posts, and a failed notification still chimes.
     """
     chime_lock = asyncio.Lock()
     roster = Roster(tuple(source.name for source in sources))
@@ -70,11 +71,21 @@ async def monitor(
                     )
                     if rising:
                         delta = snapshot.viewers - previous.viewers
-                        names = (
-                            await namer.arrivals(snapshot.target, snapshot.stream_id)
-                            if namer is not None
-                            else ()
-                        )
+                        names: tuple[str, ...] = ()
+                        if namer is not None:
+                            # ArrivalNamer is a public protocol, so treat it
+                            # like play/notify: a name is a nice-to-have and
+                            # must never cost the notification or the chime.
+                            try:
+                                names = await namer.arrivals(
+                                    snapshot.target, snapshot.stream_id
+                                )
+                            except Exception as error:
+                                _LOGGER.warning(
+                                    "could not name arrivals for %s: %s",
+                                    source.name,
+                                    error,
+                                )
                         title = render_title(snapshot.target, delta, names)
                         try:
                             await asyncio.to_thread(notify, title, roster.render())
