@@ -306,7 +306,6 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
                 "youtube_live_count_chime.twitch.TwitchClient.stream",
                 side_effect=TwitchAuthError("Twitch token request failed (HTTP 401)"),
             ),
-            patch("youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock),
             self.assertRaises(TwitchAuthError),
         ):
             await anext(source.snapshots())
