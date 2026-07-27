@@ -127,6 +127,24 @@ class MainTests(_CliTestCase):
     def test_no_handles_exits_2(self) -> None:
         self.assertEqual(main(self.argv()), 2)
 
+    def test_check_validates_and_exits_zero_without_watching(self) -> None:
+        # Patch monitor to fail loudly if reached, so a regression that lets
+        # --check fall through can't hang the suite on live network calls.
+        async def fail_if_called(
+            sources: Sequence[StreamSource], config: ChimeConfig
+        ) -> None:
+            raise AssertionError("--check must not reach the monitor")
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("youtube_live_count_chime.cli.monitor", fail_if_called),
+        ):
+            self.assertEqual(main(self.argv("--check", "-y", "@mkbhd")), 0)
+
+    def test_check_fails_on_missing_twitch_creds(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(main(self.argv("--check", "-t", "shroud")), 2)
+
     def test_missing_twitch_creds_exits_2(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(main(self.argv("-t", "shroud")), 2)
