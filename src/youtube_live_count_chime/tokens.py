@@ -7,6 +7,8 @@ import json
 from json import JSONDecodeError
 import os
 from pathlib import Path
+import tempfile
+import threading
 from typing import Final, cast
 
 
@@ -32,10 +34,15 @@ class StoredToken:
 class TokenStore:
     """A JSON file of user tokens, keyed by Twitch login, readable only by us."""
 
-    __slots__ = ("path",)
+    __slots__ = ("path", "_lock")
 
     def __init__(self, path: Path = DEFAULT_PATH) -> None:
         self.path = path
+        # save() is a read-modify-write, and every watched channel refreshes
+        # its own token through this one store from its own to_thread worker.
+        # Without the lock two concurrent rotations interleave load-load-
+        # write-write and one account's new token is lost.
+        self._lock = threading.Lock()
 
     def _load(self) -> dict[str, StoredToken]:
         if not self.path.is_file():
@@ -64,15 +71,28 @@ class TokenStore:
 
     def save(self, token: StoredToken) -> None:
         """Store one account's token, replacing any previous one for that login."""
-        tokens = self._load()
-        tokens[token.login] = token
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Create with 0600 before writing so the secret is never briefly
-        # world-readable. Use fchmod on the descriptor itself to ensure the mode
-        # is set before writing, regardless of whether the file already exists.
-        descriptor = os.open(
-            self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        with self._lock:
+            tokens = self._load()
+            tokens[token.login] = token
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._write(tokens)
+
+    def _write(self, tokens: dict[str, StoredToken]) -> None:
+        """Replace the store with ``tokens``, atomically and owner-only."""
+        # Write a sibling temp file and rename it over the real path: a crash
+        # (or a full disk) mid-write then leaves the previous store intact
+        # instead of truncated JSON that fails every later read. mkstemp
+        # creates the temp at 0600, so the secrets are never written to a
+        # world-readable file, and the rename carries that mode across even if
+        # the existing store was looser.
+        descriptor, name = tempfile.mkstemp(
+            dir=self.path.parent, prefix=f"{self.path.name}.", suffix=".tmp"
         )
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({k: asdict(v) for k, v in tokens.items()}, handle, indent=2)
+        temp = Path(name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump({k: asdict(v) for k, v in tokens.items()}, handle, indent=2)
+            os.replace(temp, self.path)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
