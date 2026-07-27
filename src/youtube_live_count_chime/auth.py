@@ -8,18 +8,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import logging
 import secrets
+import time
 from typing import Final, cast
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request
 import webbrowser
 
+from youtube_live_count_chime.models import normalize_handle
 from youtube_live_count_chime.tokens import StoredToken, TokenStore
 from youtube_live_count_chime.twitch import (
     TOKEN_URL,
     TwitchCredentials,
+    TwitchError,
     get_json,
 )
 
@@ -29,7 +31,11 @@ USERS_URL: Final = "https://api.twitch.tv/helix/users"
 REDIRECT_PORT: Final = 8419
 REDIRECT_URI: Final = f"http://localhost:{REDIRECT_PORT}"
 SCOPE: Final = "moderator:read:chatters"
-_LOGGER: Final = logging.getLogger(__name__)
+# Overall budget for the whole wait (covers preconnects/favicon probes that eat
+# a request without carrying the callback); per-socket-read budget below it so
+# one silent connection can't consume the whole window.
+_FLOW_TIMEOUT_SECONDS: Final = 300.0
+_SOCKET_TIMEOUT_SECONDS: Final = 30.0
 
 
 class AuthError(RuntimeError):
@@ -64,6 +70,32 @@ def parse_callback(path: str, expected_state: str) -> str:
     return code
 
 
+def parse_token_response(payload: object) -> tuple[str, str]:
+    """Validate a code-exchange response and return (access_token, refresh_token)."""
+    fields = cast("dict[str, object]", payload if isinstance(payload, dict) else {})
+    access = fields.get("access_token")
+    refresh = fields.get("refresh_token")
+    if not isinstance(access, str) or not access:
+        raise AuthError("Twitch returned no access token")
+    if not isinstance(refresh, str) or not refresh:
+        raise AuthError("Twitch returned no refresh token")
+    return access, refresh
+
+
+def parse_identity(payload: object) -> tuple[str, str]:
+    """Validate a users-endpoint response and return (login, user_id)."""
+    fields = cast("dict[str, object]", payload if isinstance(payload, dict) else {})
+    data = fields.get("data")
+    if not isinstance(data, list) or not data:
+        raise AuthError("Twitch returned no user for this token")
+    entry = cast("dict[str, object]", cast("list[object]", data)[0])
+    login = entry.get("login")
+    user_id = entry.get("id")
+    if not isinstance(login, str) or not isinstance(user_id, str):
+        raise AuthError("Twitch returned a malformed user")
+    return login, user_id
+
+
 def _exchange_code(code: str, credentials: TwitchCredentials) -> tuple[str, str]:
     request = Request(
         TOKEN_URL,
@@ -82,14 +114,9 @@ def _exchange_code(code: str, credentials: TwitchCredentials) -> tuple[str, str]
         payload = get_json(request)
     except HTTPError as error:
         raise AuthError(f"code exchange failed (HTTP {error.code})") from error
-    fields = cast("dict[str, object]", payload if isinstance(payload, dict) else {})
-    access = fields.get("access_token")
-    refresh = fields.get("refresh_token")
-    if not isinstance(access, str) or not access:
-        raise AuthError("Twitch returned no access token")
-    if not isinstance(refresh, str) or not refresh:
-        raise AuthError("Twitch returned no refresh token")
-    return access, refresh
+    except TwitchError as error:
+        raise AuthError(f"code exchange failed: {error}") from error
+    return parse_token_response(payload)
 
 
 def _identify(access_token: str, credentials: TwitchCredentials) -> tuple[str, str]:
@@ -106,24 +133,21 @@ def _identify(access_token: str, credentials: TwitchCredentials) -> tuple[str, s
         payload = get_json(request)
     except HTTPError as error:
         raise AuthError(f"could not identify the account (HTTP {error.code})") from error
-    fields = cast("dict[str, object]", payload if isinstance(payload, dict) else {})
-    data = fields.get("data")
-    if not isinstance(data, list) or not data:
-        raise AuthError("Twitch returned no user for this token")
-    entry = cast("dict[str, object]", cast("list[object]", data)[0])
-    login = entry.get("login")
-    user_id = entry.get("id")
-    if not isinstance(login, str) or not isinstance(user_id, str):
-        raise AuthError("Twitch returned a malformed user")
-    return login, user_id
+    except TwitchError as error:
+        raise AuthError(f"could not identify the account: {error}") from error
+    return parse_identity(payload)
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
     """Capture one OAuth callback, then let the server shut down."""
 
     path_seen: str | None = None
+    # Bounds a single accepted-but-silent connection (e.g. a browser
+    # preconnect that never sends a request line) so it cannot block forever
+    # regardless of the overall flow deadline.
+    timeout = _SOCKET_TIMEOUT_SECONDS
 
-    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's contract
+    def do_GET(self) -> None:
         type(self).path_seen = self.path
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -142,6 +166,9 @@ def run_auth_flow(
     open_browser: Callable[[str], bool] = webbrowser.open,
 ) -> StoredToken:
     """Run the browser consent flow for one account and store its token."""
+    # Twitch always returns logins lowercased; normalize the request to match,
+    # since chatters.py later looks the token up by the normalized handle.
+    login = normalize_handle(login)
     state = secrets.token_urlsafe(24)
     _CallbackHandler.path_seen = None
     url = authorize_url(credentials.client_id, state)
@@ -149,9 +176,24 @@ def run_auth_flow(
     print(f"If it does not open, visit:\n  {url}", flush=True)
     open_browser(url)
 
-    with HTTPServer(("127.0.0.1", REDIRECT_PORT), _CallbackHandler) as server:
-        server.timeout = 300.0
-        server.handle_request()
+    try:
+        server = HTTPServer(("127.0.0.1", REDIRECT_PORT), _CallbackHandler)
+    except OSError as error:
+        raise AuthError(
+            f"could not bind to port {REDIRECT_PORT} (already in use?)"
+        ) from error
+
+    with server:
+        deadline = time.monotonic() + _FLOW_TIMEOUT_SECONDS
+        # One handle_request() can be consumed by a preconnect or a stray
+        # favicon request without ever carrying the callback, so keep
+        # accepting requests until we see one or the overall budget expires.
+        while _CallbackHandler.path_seen is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            server.timeout = remaining
+            server.handle_request()
 
     seen = _CallbackHandler.path_seen
     if seen is None:
