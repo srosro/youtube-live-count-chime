@@ -30,8 +30,17 @@ _CLIENT_ID_ENV: Final = "TWITCH_CLIENT_ID"
 _CLIENT_SECRET_ENV: Final = "TWITCH_CLIENT_SECRET"
 
 
-class TwitchError(SourceFetchError):
-    """Raised when a Twitch credential or response cannot be used."""
+class TwitchError(RuntimeError):
+    """Raised when a Twitch credential or response cannot be used.
+
+    Deliberately *not* a ``SourceFetchError``: rejected credentials fail every
+    poll forever, so letting the poll loop swallow them would hammer the token
+    endpoint behind a log that looks healthy. These stop the watcher instead.
+    """
+
+
+class TwitchRequestError(TwitchError, SourceFetchError):
+    """Raised when one Twitch request fails in a way a later poll may survive."""
 
 
 def _object_dict(value: object) -> dict[str, object] | None:
@@ -79,7 +88,7 @@ def parse_stream(payload: object, target: StreamTarget) -> StreamSnapshot:
     value = _object_dict(payload)
     data = value.get("data") if value is not None else None
     if not isinstance(data, list):
-        raise TwitchError("invalid Twitch streams response")
+        raise TwitchRequestError("invalid Twitch streams response")
 
     if not data:
         return StreamSnapshot.offline(target)
@@ -88,7 +97,7 @@ def parse_stream(payload: object, target: StreamTarget) -> StreamSnapshot:
     stream_id = entry.get("id") if entry is not None else None
     viewers = _strict_int(entry.get("viewer_count")) if entry is not None else None
     if not isinstance(stream_id, str) or not stream_id or viewers is None or viewers < 0:
-        raise TwitchError("invalid Twitch stream entry")
+        raise TwitchRequestError("invalid Twitch stream entry")
     return StreamSnapshot(target, stream_id, viewers)
 
 
@@ -99,7 +108,7 @@ def _get_json(request: Request) -> object:
     except HTTPError:
         raise
     except (URLError, HTTPException, OSError, JSONDecodeError, UnicodeDecodeError) as error:
-        raise TwitchError(
+        raise TwitchRequestError(
             f"Twitch request failed ({type(error).__name__})"
         ) from error
 
@@ -170,7 +179,7 @@ class TwitchClient:
 
     @staticmethod
     def _streams_error(error: HTTPError) -> TwitchError:
-        return TwitchError(f"Twitch streams request failed (HTTP {error.code})")
+        return TwitchRequestError(f"Twitch streams request failed (HTTP {error.code})")
 
     def stream(self, target: StreamTarget) -> StreamSnapshot:
         """Return the target's snapshot, refreshing the token once after HTTP 401."""

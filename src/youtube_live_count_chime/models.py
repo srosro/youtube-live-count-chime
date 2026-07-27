@@ -1,4 +1,5 @@
-"""Shared typed models for livestream viewer-count sources."""
+"""Shared typed models for livestream viewer-count sources, and the polling
+loop every source runs on top of them."""
 
 from __future__ import annotations
 

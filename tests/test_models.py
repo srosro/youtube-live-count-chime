@@ -56,14 +56,18 @@ class StreamSnapshotTests(unittest.TestCase):
 class PollSnapshotsTests(unittest.IsolatedAsyncioTestCase):
     target = StreamTarget(Platform.YOUTUBE, "a")
 
-    async def collect(self, outcomes: list[object], wanted: int) -> list[str]:
+    async def collect(
+        self, outcomes: list[StreamSnapshot | SourceFetchError], wanted: int
+    ) -> list[str]:
         """Run poll_snapshots over scripted outcomes, returning the warnings logged."""
+        script = iter(outcomes)
 
         def fetch() -> StreamSnapshot:
-            outcome = outcomes.pop(0)
-            if isinstance(outcome, BaseException):
+            outcome = next(script, None)
+            if outcome is None:
+                self.fail("poll_snapshots polled more times than the script allows")
+            if isinstance(outcome, SourceFetchError):
                 raise outcome
-            assert isinstance(outcome, StreamSnapshot)
             return outcome
 
         with (

@@ -237,6 +237,20 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(seen[1].viewers)
         self.assertEqual(source.target.name, "shroud")
 
+    async def test_rejected_credentials_stop_the_source_instead_of_retrying(self) -> None:
+        # Bad credentials fail every poll forever, so they must escape the poll
+        # loop rather than be warned once and retried behind a quiet log.
+        source = TwitchSource.for_login("shroud", TwitchClient(CREDS))
+        with (
+            patch(
+                "youtube_live_count_chime.twitch.TwitchClient.stream",
+                side_effect=TwitchError("Twitch token request failed (HTTP 401)"),
+            ),
+            patch("youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock),
+            self.assertRaises(TwitchError),
+        ):
+            await anext(source.snapshots())
+
 
 if __name__ == "__main__":
     unittest.main()
