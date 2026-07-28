@@ -13,6 +13,7 @@ from youtube_live_count_chime.chatters import (
 from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.tokens import StoredToken, TokenStore, TokenStoreError
 from youtube_live_count_chime.twitch import (
+    CREDENTIAL_REJECTED_STATUSES,
     TwitchAuthError,
     TwitchCredentials,
     TwitchRequestError,
@@ -461,36 +462,79 @@ class ChatterClientTests(unittest.TestCase):
         self.assertNotIn("not authorized", str(refused.exception))
 
     def test_a_permanently_rejected_refresh_short_circuits_later_polls(self) -> None:
-        # Twitch answers 400 when the refresh token has been revoked or already
-        # redeemed: no later poll can recover it. Treated as retryable, the 5s
-        # poll resubmits the same dead token forever, and the operator is never
-        # told that reauthorizing is the repair.
+        # Every status the token endpoint uses to refuse a grant or the
+        # application's own credentials: a revoked or redeemed refresh token, a
+        # rotated client secret. No later poll can recover any of them. Treated
+        # as retryable, the 5s poll resubmits the same dead grant forever, and
+        # the operator is never told what to repair.
+        for code in sorted(CREDENTIAL_REJECTED_STATUSES):
+            with self.subTest(code=code):
+                store = _RecordingStore()
+                client = ChatterClient(TwitchCredentials("id", "secret"), store)
+                responses: list[object] = [
+                    self._http_error(401),  # the read: token expired
+                    self._http_error(code),  # the refresh: refused for good
+                ]
+
+                with patch(
+                    "youtube_live_count_chime.chatters.get_json",
+                    side_effect=lambda request: _next_response(responses),
+                ):
+                    with self.assertLogs(
+                        "youtube_live_count_chime.chatters", "ERROR"
+                    ) as logs:
+                        with self.assertRaises(TwitchAuthError):
+                            client.chatters(TOKEN)
+
+                self.assertEqual(responses, [])  # one read, one refresh, no retry
+                # The status alone cannot say which cause it is, so both are named.
+                told = "\n".join(logs.output)
+                self.assertIn("--auth watchmepivot", told)
+                self.assertIn("application credentials", told)
+                self.assertEqual(store.saved, [])
+
+                # The store still holds the stale token, so every later poll
+                # presents it: no read, no second refresh POST, no second telling.
+                with patch("youtube_live_count_chime.chatters.get_json") as get_json:
+                    with self.assertNoLogs("youtube_live_count_chime.chatters", "ERROR"):
+                        with self.assertRaises(TwitchAuthError):
+                            client.chatters(TOKEN)
+                self.assertEqual(get_json.call_count, 0)
+
+    def test_a_transient_refresh_failure_is_not_memoized(self) -> None:
+        # The other half of that split. A Helix outage during a refresh is
+        # transient, so it must raise TwitchRequestError and remember nothing:
+        # an implementation that memoized every failed refresh would silence
+        # naming for the channel until the process restarts, after one blip.
         store = _RecordingStore()
         client = ChatterClient(TwitchCredentials("id", "secret"), store)
-        responses: list[object] = [
-            self._http_error(401),  # the read: token expired
-            self._http_error(400),  # the refresh: the grant is gone
-        ]
+        for code in (500, 503):
+            with self.subTest(code=code):
+                responses: list[object] = [
+                    self._http_error(401),  # the read: token expired
+                    self._http_error(code),  # the refresh: Twitch is degraded
+                ]
+                with patch(
+                    "youtube_live_count_chime.chatters.get_json",
+                    side_effect=lambda request: _next_response(responses),
+                ):
+                    with self.assertRaises(TwitchRequestError):
+                        client.chatters(TOKEN)
+                self.assertEqual(responses, [])  # one read, one refresh, no retry
 
+        # Nothing was refused, so the next poll runs the whole path again and
+        # succeeds the moment Twitch recovers.
+        recovered: list[object] = [
+            self._http_error(401),
+            {"access_token": "fresh-placeholder", "refresh_token": "rotated"},
+            {"data": [{"user_login": "joe_doe"}]},
+        ]
         with patch(
             "youtube_live_count_chime.chatters.get_json",
-            side_effect=lambda request: _next_response(responses),
+            side_effect=lambda request: _next_response(recovered),
         ):
-            with self.assertLogs("youtube_live_count_chime.chatters", "ERROR") as logs:
-                with self.assertRaises(TwitchAuthError):
-                    client.chatters(TOKEN)
-
-        self.assertEqual(responses, [])  # one read, one refresh, no retry
-        self.assertIn("--auth watchmepivot", "\n".join(logs.output))
-        self.assertEqual(store.saved, [])
-
-        # The store still holds the stale token, so every later poll presents
-        # it: no read, no second refresh POST, and no second telling.
-        with patch("youtube_live_count_chime.chatters.get_json") as get_json:
-            with self.assertNoLogs("youtube_live_count_chime.chatters", "ERROR"):
-                with self.assertRaises(TwitchAuthError):
-                    client.chatters(TOKEN)
-        self.assertEqual(get_json.call_count, 0)
+            self.assertEqual(client.chatters(TOKEN), frozenset({"joe_doe"}))
+        self.assertEqual(recovered, [])
 
     def test_a_non_401_failure_is_not_retried(self) -> None:
         client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())

@@ -28,9 +28,10 @@ TOKEN_URL: Final = "https://id.twitch.tv/oauth2/token"
 STREAMS_URL: Final = "https://api.twitch.tv/helix/streams"
 _CLIENT_ID_ENV: Final = "TWITCH_CLIENT_ID"
 _CLIENT_SECRET_ENV: Final = "TWITCH_CLIENT_SECRET"
-# Token-endpoint statuses that mean the credentials themselves are refused.
-# Everything else it returns (429 rate limits, 5xx degradation) is transient.
-_CREDENTIAL_REJECTED_STATUSES: Final = frozenset({400, 401, 403})
+# Token-endpoint statuses that mean the grant or the credentials themselves are
+# refused — for a client-credentials mint and for a refresh alike. Everything
+# else that endpoint returns (429 rate limits, 5xx degradation) is transient.
+CREDENTIAL_REJECTED_STATUSES: Final = frozenset({400, 401, 403})
 
 
 class TwitchRequestError(SourceFetchError):
@@ -156,7 +157,7 @@ class TwitchClient:
             payload = get_json(request)
         except HTTPError as error:
             message = f"Twitch token request failed (HTTP {error.code})"
-            if error.code in _CREDENTIAL_REJECTED_STATUSES:
+            if error.code in CREDENTIAL_REJECTED_STATUSES:
                 raise TwitchAuthError(message) from error
             raise TwitchRequestError(message) from error
         token = parse_app_token(payload)

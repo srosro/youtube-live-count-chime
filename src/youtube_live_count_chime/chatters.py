@@ -24,6 +24,7 @@ from urllib.request import Request
 from youtube_live_count_chime.models import Platform, StreamTarget
 from youtube_live_count_chime.tokens import StoredToken, TokenStoreError
 from youtube_live_count_chime.twitch import (
+    CREDENTIAL_REJECTED_STATUSES,
     TOKEN_URL,
     TwitchCredentials,
     TwitchAuthError,
@@ -122,18 +123,22 @@ class ChatterClient:
         try:
             payload = get_json(request)
         except HTTPError as error:
-            if error.code != 400:
+            if error.code not in CREDENTIAL_REJECTED_STATUSES:
                 raise TwitchRequestError(f"token refresh failed (HTTP {error.code})") from error
-            # Twitch answers 400 for a refresh token that is revoked or already
-            # redeemed — permanent. Left retryable, the 5s poll resubmits the
-            # same dead token forever and the operator never hears the one
-            # diagnosis that would fix it.
-            refusal = f"{token.login}'s Twitch authorization is no longer valid"
+            # This POST goes to TOKEN_URL, so its permanent statuses are that
+            # endpoint's: a revoked or already-redeemed refresh token, and an
+            # application client id or secret Twitch will not accept, share
+            # them. Left retryable, the 5s poll resubmits the same dead grant
+            # forever and the operator never hears a diagnosis at all. The
+            # status cannot tell the two causes apart, so the telling names
+            # both rather than asserting the likelier one.
+            refusal = f"Twitch refuses to refresh {token.login}'s token"
             self._refused[token.access_token] = refusal
             _LOGGER.error(
-                "Twitch refuses to refresh the token for %s. Run --auth %s "
-                "again to reauthorize. Arrivals on that channel will not be "
-                "named until then.",
+                "Twitch refuses to refresh the token for %s. Either that "
+                "account's authorization needs re-running (--auth %s) or the "
+                "configured Twitch application credentials are wrong. Arrivals "
+                "on that channel will not be named until then.",
                 token.login,
                 token.login,
             )
