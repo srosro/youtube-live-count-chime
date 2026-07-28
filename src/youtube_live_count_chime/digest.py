@@ -35,5 +35,5 @@ def render_roster(
 
 
 def render_title(target: StreamTarget, delta: int) -> str:
-    """Render the arrival line for a rise of ``delta`` on ``target``."""
+    """Render the banner title for a rise of ``delta`` on ``target``."""
     return f"+{delta} watching {target.label}"

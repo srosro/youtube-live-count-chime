@@ -112,6 +112,25 @@ Twitch credentials are needed at all.)
 
 Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 
+## Notifications
+
+A rise in the viewer count also posts a macOS notification. Its title reports
+the rise on the channel that moved — `+2 watching twitch watchmepivot` — and its
+body is a digest of every channel being watched, always in the same order:
+
+```
+twitch watchmepivot 3 · youtube srosrosr 4 · twitch offchannel offline
+```
+
+The digest is fixed-shape, so a channel never disappears from it: a channel
+observed not streaming reads `offline`, and one that has not been polled yet —
+or whose last poll failed — reads `?` rather than a stale number. A fall chimes
+but posts no notification.
+
+Notifications go through `osascript`, so the first rise may prompt for
+notification permission. If the banner cannot be posted the watcher logs a
+warning and keeps watching; the chime always plays first and never waits on it.
+
 ## Run at login (macOS)
 
 To keep the watcher running automatically, install it as a launchd
@@ -152,16 +171,13 @@ A join and a departure between polls can cancel out, and only the resulting
 displayed count is observable. Monitoring is limited to publicly live channels.
 
 A failed poll — an unreachable page, or an unparseable YouTube page or Helix
-response — yields no observation at all on either platform, so it never chimes
-on its own and the last count is kept. What differs is an *ended* stream: the
-Twitch source receives an explicit offline signal and clears that channel's
-baseline, while the YouTube source cannot tell an ended stream from an
-unparseable page and reports both the same way: one warning at the start of the
-outage, then silence until a poll succeeds. Because a new broadcast has a
-different stream id, it re-baselines silently instead of chiming against the old
-count. One caveat of keeping the last count on any outage: if the *same* stream
-returns after a long gap, the next observation chimes once for the whole
-accumulated drift.
+response — makes that channel's count *unknown*: it never chimes on its own, it
+renders as `?` in the notification digest, and its chime baseline is cleared, so
+the first poll back re-baselines silently instead of chiming the whole gap-wide
+drift. What differs is an *ended* stream: the Twitch source receives an explicit
+offline signal and reports the channel as `offline`, while the YouTube source
+cannot tell an ended stream from an unparseable page and reports both the same
+way: one warning at the start of the outage, then silence until a poll succeeds.
 
 ## Development
 

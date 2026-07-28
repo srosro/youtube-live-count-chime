@@ -1,3 +1,4 @@
+import asyncio
 import io
 import unittest
 from collections.abc import AsyncIterator, Sequence
@@ -6,6 +7,7 @@ from pathlib import Path
 
 from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarget
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
+from youtube_live_count_chime.notify import NotificationError
 from youtube_live_count_chime.sounds import SoundPlaybackError
 
 
@@ -39,6 +41,14 @@ def live(target: StreamTarget, viewers: int) -> StreamSnapshot:
     return StreamSnapshot(target, "s1", viewers)
 
 
+def silent(title: str, body: str) -> None:
+    """Swallow notifications in tests that assert only on chime behavior.
+
+    monitor() defaults to the real osascript notifier, so a rise in a test
+    that does not inject one posts an actual banner (and fails off macOS).
+    """
+
+
 class MonitorTests(unittest.IsolatedAsyncioTestCase):
     async def test_chimes_up_and_down_but_not_on_baseline_or_no_change(self) -> None:
         target = StreamTarget(Platform.YOUTUBE, "a")
@@ -48,6 +58,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             [FakeSource(target, snaps)],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            notify=silent,
         )
         self.assertEqual(played, [UP, DOWN])  # 5->5 silent, 5->9 up, 9->2 down
 
@@ -62,6 +73,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             ],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            notify=silent,
         )
         self.assertEqual(played, [UP])  # a 1->2 up; b unchanged; baselines silent
 
@@ -73,6 +85,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 [FakeSource(a, [live(a, 5), live(a, 9)])],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
+                notify=silent,
             )
         # Pins previous->current order and the up/down word (a swap would show
         # "9 -> 5" or "(down)").
@@ -96,6 +109,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             ],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            notify=silent,
         )
         # Every reset step is silent, and chiming resumes on the next real delta.
         self.assertEqual(played, [UP])
@@ -114,6 +128,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 [FakeSource(a, [live(a, 1), live(a, 2), live(a, 3)])],
                 ChimeConfig(UP, DOWN),
                 play=boom,
+                notify=silent,
             )
         self.assertEqual(len(logs.records), 2)
 
@@ -127,6 +142,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
+                notify=silent,
             )
         # Pin the full wrapper message and the preserved cause: this fails if
         # the channel-naming wrapper or its `from error` chaining is dropped.
@@ -149,8 +165,126 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             [FakeSource(a, [live(a, 10), None, live(a, 500), live(a, 502)])],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            notify=silent,
         )
         self.assertEqual(played, [UP])
+
+
+class NotificationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_chime_plays_before_notifying(self) -> None:
+        # The chime is the pre-existing signal and owes nothing to the network.
+        # The banner costs an osascript call (bounded at 10s), so ordering it
+        # before the chime delays every chime behind I/O.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        events: list[str] = []
+
+        await monitor(
+            [FakeSource(a, [live(a, 1), live(a, 2)])],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: events.append("chime"),
+            notify=lambda title, body: events.append("notify"),
+        )
+
+        self.assertEqual(events, ["chime", "notify"])
+
+    async def test_a_rise_notifies_with_the_delta_and_its_own_current_count(
+        self,
+    ) -> None:
+        a = StreamTarget(Platform.TWITCH, "watchmepivot")
+        b = StreamTarget(Platform.YOUTUBE, "srosrosr")
+        posted: list[tuple[str, str]] = []
+
+        # The other source (b) is present to exercise the multi-source shape
+        # of the digest, but its own rendered count depends on cross-task
+        # scheduling order, which monitor() does not guarantee — that
+        # full-roster rendering (fixed order, unchanged/offline entries) is
+        # exhaustively covered directly against render_roster in test_digest.py.
+        # Only the rising channel's own count is deterministic here: its
+        # roster entry is always written before it notifies.
+        await monitor(
+            [
+                FakeSource(a, [live(a, 1), live(a, 3)]),
+                FakeSource(b, [live(b, 7)]),
+            ],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            notify=lambda title, body: posted.append((title, body)),
+        )
+
+        self.assertEqual(len(posted), 1)
+        title, body = posted[0]
+        self.assertEqual(title, "+2 watching twitch watchmepivot")
+        self.assertIn("twitch watchmepivot 3", body)
+
+    async def test_a_fall_chimes_but_posts_no_notification(self) -> None:
+        a = StreamTarget(Platform.TWITCH, "chan")
+        posted: list[tuple[str, str]] = []
+        played: list[Path] = []
+
+        await monitor(
+            [FakeSource(a, [live(a, 5), live(a, 2)])],
+            ChimeConfig(UP, DOWN),
+            play=played.append,
+            notify=lambda title, body: posted.append((title, body)),
+        )
+
+        self.assertEqual(posted, [])
+        self.assertEqual(played, [DOWN])  # the fall is still audible
+
+    async def test_a_notification_failure_does_not_stop_the_watcher(self) -> None:
+        a = StreamTarget(Platform.TWITCH, "chan")
+        played: list[Path] = []
+
+        def explode(title: str, body: str) -> None:
+            raise NotificationError("banner refused")
+
+        # The warning is the operator's only signal that banners are broken.
+        with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
+            await monitor(
+                [FakeSource(a, [live(a, 1), live(a, 2), live(a, 5)])],
+                ChimeConfig(UP, DOWN),
+                play=played.append,
+                notify=explode,
+            )
+
+        self.assertEqual(played, [UP, UP])  # both rises still chimed
+        self.assertEqual(len(logs.records), 2)  # each failure warned
+
+    async def test_a_failed_poll_leaves_no_stale_count_in_another_channels_digest(
+        self,
+    ) -> None:
+        # A failed poll means "unknown", which is neither "offline" nor "still
+        # 7": the rising channel's banner must not publish the blind channel's
+        # pre-outage count as though it were current.
+        rising = StreamTarget(Platform.YOUTUBE, "rising")
+        blind = StreamTarget(Platform.TWITCH, "blind")
+        posted: list[tuple[str, str]] = []
+        polled = asyncio.Event()
+
+        class _Blind(FakeSource):
+            async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
+                for snap in self._snaps:
+                    yield snap
+                polled.set()
+
+        class _Rising(FakeSource):
+            async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
+                yield self._snaps[0]
+                await polled.wait()  # order the rise after the failed poll
+                yield self._snaps[1]
+
+        await monitor(
+            [
+                _Rising(rising, [live(rising, 1), live(rising, 2)]),
+                _Blind(blind, [live(blind, 7), None]),
+            ],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            notify=lambda title, body: posted.append((title, body)),
+        )
+
+        self.assertEqual(len(posted), 1)
+        self.assertIn("twitch blind ?", posted[0][1])
 
 
 if __name__ == "__main__":
