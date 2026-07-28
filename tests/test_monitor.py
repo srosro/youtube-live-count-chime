@@ -1,5 +1,6 @@
 import asyncio
 import io
+import threading
 import unittest
 from collections.abc import AsyncIterator, Sequence
 from contextlib import redirect_stdout
@@ -274,6 +275,40 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(title, "+2 watching twitch watchmepivot")
         self.assertEqual(body, "twitch watchmepivot 3 · youtube srosrosr 7")
 
+    async def test_a_slow_notification_does_not_delay_the_next_poll(self) -> None:
+        # Delivery is bounded but real (10s), and the polling generator sleeps
+        # its interval only once the consumer comes back for the next
+        # snapshot — so awaiting the banner inline stretches this channel's
+        # cadence by however long the banner takes. The notifier here blocks
+        # until the next poll is requested, which only ever happens if
+        # consume() did not wait for delivery.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        polled_again = asyncio.Event()
+        release = threading.Event()
+        events: list[str] = []
+
+        def slow(title: str, body: str) -> None:
+            # Bounded so a regression fails an assertion, not the clock.
+            release.wait(5.0)
+            events.append("notified")
+
+        async def release_once_polled() -> None:
+            await polled_again.wait()
+            events.append("polled")
+            release.set()
+
+        await asyncio.gather(
+            monitor(
+                [LeadingSource(a, [live(a, 1), live(a, 2)], polled_again)],
+                ChimeConfig(UP, DOWN),
+                play=lambda path: None,
+                notify=slow,
+            ),
+            release_once_polled(),
+        )
+
+        self.assertEqual(events, ["polled", "notified"])
+
     async def test_a_fall_chimes_but_posts_no_notification(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
@@ -291,22 +326,29 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_notification_failure_does_not_stop_the_watcher(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
+        b = StreamTarget(Platform.YOUTUBE, "other")
         played: list[Path] = []
 
         def explode(title: str, body: str) -> None:
             raise NotificationError("banner refused")
 
         # The warning is the operator's only signal that banners are broken.
+        # The send runs as its own task now, and a task that raises inside a
+        # TaskGroup cancels its siblings — so the second channel pins that a
+        # refused banner takes down neither its own channel nor any other.
         with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
             await monitor(
-                [FakeSource(a, [live(a, 1), live(a, 2), live(a, 5)])],
+                [
+                    FakeSource(a, [live(a, 1), live(a, 2), live(a, 5)]),
+                    FakeSource(b, [live(b, 1), live(b, 4)]),
+                ],
                 ChimeConfig(UP, DOWN),
                 play=played.append,
                 notify=explode,
             )
 
-        self.assertEqual(played, [UP, UP])  # both rises still chimed
-        self.assertEqual(len(logs.records), 2)  # each failure warned
+        self.assertEqual(played, [UP, UP, UP])  # all three rises still chimed
+        self.assertEqual(len(logs.records), 3)  # each failure warned
 
     async def test_the_digest_tells_a_failed_poll_apart_from_a_confirmed_offline(
         self,

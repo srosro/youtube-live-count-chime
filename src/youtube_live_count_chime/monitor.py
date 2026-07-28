@@ -37,17 +37,33 @@ async def monitor(
 
     A rise also posts a macOS notification. The roster of current counts is
     shared across consumers, so every notification carries the same
-    fixed-shape digest of every watched channel. The chime fires first and
-    unconditionally, ahead of the osascript call. Playback and notification
-    failures are each warned and skipped so one channel's glitch never stops
-    the watcher: a failed notification still leaves the chime played, and
-    neither costs the other channels. Any other exception escaping a source
-    is an unexpected bug: the TaskGroup cancels the siblings and ``main``
-    reports it (named with the channel) and exits non-zero.
+    fixed-shape digest of every watched channel. The chime fires first,
+    unconditionally, and awaited; the banner is only scheduled, so a slow
+    osascript call never stretches the channel's poll cadence. Playback and
+    notification failures are each warned and skipped so one channel's glitch
+    never stops the watcher: a failed notification still leaves the chime
+    played, and neither costs the other channels. Any other exception
+    escaping a source is an unexpected bug: the TaskGroup cancels the
+    siblings and ``main`` reports it (named with the channel) and exits
+    non-zero.
     """
     chime_lock = asyncio.Lock()
+    notify_lock = asyncio.Lock()
     order = tuple(source.target for source in sources)
     counts: dict[StreamTarget, int | None] = {}
+
+    async def send(target: StreamTarget, delta: int) -> None:
+        """Post one banner, serialized so the last one shown is the newest.
+
+        Concurrent sends could otherwise complete out of order; rendering the
+        roster inside the lock means whichever posts last is also the freshest.
+        """
+        async with notify_lock:
+            title = render_title(target, delta)
+            try:
+                await asyncio.to_thread(notify, title, render_roster(order, counts))
+            except NotificationError as error:
+                _LOGGER.warning("could not notify for %s: %s", target.key, error)
 
     async def consume(source: StreamSource) -> None:
         previous: StreamSnapshot | None = None
@@ -96,15 +112,8 @@ async def monitor(
                                 "could not play chime for %s: %s", source.target.key, error
                             )
                     if rising:
-                        title = render_title(source.target, delta)
-                        try:
-                            await asyncio.to_thread(
-                                notify, title, render_roster(order, counts)
-                            )
-                        except NotificationError as error:
-                            _LOGGER.warning(
-                                "could not notify for %s: %s", source.target.key, error
-                            )
+                        # Not awaited: polling resumes now, TaskGroup joins it.
+                        group.create_task(send(source.target, delta))
                 previous = snapshot
         except Exception as error:
             # Name the channel in the failure that main will report.
