@@ -357,7 +357,7 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
             namer = TwitchChatterNamer(client, _FakeStore(TOKEN))
             with patch(
                 "youtube_live_count_chime.chatters.get_json",
-                side_effect=lambda request: _next_response(responses),
+                side_effect=responses,
             ):
                 self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
 
@@ -408,7 +408,7 @@ class ChatterClientTests(unittest.TestCase):
 
         with patch(
             "youtube_live_count_chime.chatters.get_json",
-            side_effect=lambda request: _next_response(refused),
+            side_effect=refused,
         ):
             with self.assertLogs("youtube_live_count_chime.chatters", "ERROR") as logs:
                 with self.assertRaises(TwitchAuthError):
