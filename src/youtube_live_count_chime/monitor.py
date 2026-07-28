@@ -9,7 +9,9 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from youtube_live_count_chime.models import StreamSnapshot, StreamSource
+from youtube_live_count_chime.digest import render_roster
+from youtube_live_count_chime.models import StreamSnapshot, StreamSource, StreamTarget
+from youtube_live_count_chime.notify import NotificationError, post_notification
 from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
 
 
@@ -29,22 +31,48 @@ async def monitor(
     config: ChimeConfig,
     *,
     play: Callable[[Path], None] = play_sound,
+    notify: Callable[[str, str], None] = post_notification,
 ) -> None:
-    """Watch every source concurrently, chiming once per viewer-count change.
+    """Watch every source concurrently, chiming and notifying on count changes.
 
-    Each source has one consumer that keeps the previous live snapshot and
-    chimes when the same stream's count moves. A playback failure (e.g. the
-    output device switching mid-chime) is warned and skipped so one channel's
-    audio glitch never stops the watcher. Any other exception escaping a
-    source is an unexpected bug: the TaskGroup cancels the siblings and
-    ``main`` reports it (named with the channel) and exits non-zero.
+    A rise also posts a macOS notification. The roster of current counts is
+    shared across consumers, so every notification carries the same
+    fixed-shape digest of every watched channel. The chime fires first,
+    unconditionally, and awaited; the banner is then posted inline, so its
+    title and body describe one moment and this channel's banners stay in
+    order. Delivery costs ~0.13s against a 5s poll interval and only this
+    channel's task waits on it. Playback and notification failures are each
+    warned and skipped so one channel's glitch never stops the watcher: a
+    failed notification still leaves the chime played, and neither costs the
+    other channels. Any other exception escaping a source is an unexpected
+    bug: the TaskGroup cancels the siblings and ``main`` reports it (named
+    with the channel) and exits non-zero.
     """
     chime_lock = asyncio.Lock()
+    order = tuple(source.target for source in sources)
+    counts: dict[StreamTarget, int | None] = {}
 
     async def consume(source: StreamSource) -> None:
         previous: StreamSnapshot | None = None
         try:
             async for snapshot in source.snapshots():
+                if snapshot is None:
+                    # A failed poll: unknown, not offline. Both the digest count
+                    # and the chime baseline are pre-outage samples. Drop the
+                    # count so the digest publishes no stale number, and clear
+                    # the baseline so the first poll back cannot be a rise —
+                    # which is what keeps recovery from chiming a gap-wide
+                    # delta. Recovery re-baselines silently, at one lost chime
+                    # per outage.
+                    #
+                    # This branch must stay idempotent: a sustained outage
+                    # marks `None` once, not once per poll, so anything
+                    # stateful added here (an outage counter, a gap-length
+                    # rule) would silently stop being fed.
+                    counts.pop(source.target, None)
+                    previous = None
+                    continue
+                counts[source.target] = snapshot.viewers
                 if snapshot.stream_id is None:
                     previous = None
                     continue
@@ -55,25 +83,41 @@ async def monitor(
                     and previous.viewers != snapshot.viewers
                 ):
                     assert previous.viewers is not None
-                    rising = snapshot.viewers > previous.viewers
+                    delta = snapshot.viewers - previous.viewers
+                    rising = delta > 0
                     direction = "up" if rising else "down"
                     sound = config.up_sound if rising else config.down_sound
                     print(
-                        f"{source.name}: {previous.viewers} -> {snapshot.viewers} "
+                        f"{source.target.key}: {previous.viewers} -> {snapshot.viewers} "
                         f"({direction})",
                         flush=True,
                     )
+                    # Chime first: it is the pre-existing signal and owes
+                    # nothing to the network. The banner costs an osascript
+                    # call, so posting it first would delay every chime
+                    # behind I/O.
                     async with chime_lock:
                         try:
                             await asyncio.to_thread(play, sound)
                         except SoundPlaybackError as error:
                             _LOGGER.warning(
-                                "could not play chime for %s: %s", source.name, error
+                                "could not play chime for %s: %s", source.target.key, error
+                            )
+                    if rising:
+                        try:
+                            await asyncio.to_thread(
+                                notify,
+                                f"+{delta} watching {source.target.label}",
+                                render_roster(order, counts),
+                            )
+                        except NotificationError as error:
+                            _LOGGER.warning(
+                                "could not notify for %s: %s", source.target.key, error
                             )
                 previous = snapshot
         except Exception as error:
             # Name the channel in the failure that main will report.
-            raise RuntimeError(f"source {source.name} failed") from error
+            raise RuntimeError(f"source {source.target.key} failed") from error
 
     async with asyncio.TaskGroup() as group:
         for source in sources:

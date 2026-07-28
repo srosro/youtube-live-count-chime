@@ -163,14 +163,15 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
 
             snapshot = await anext(source.snapshots())
 
+        assert snapshot is not None
         fetcher.assert_called_once_with("https://www.youtube.com/@watchmepivot/live")
         self.assertEqual(snapshot.target.key, "youtube:watchmepivot")
         self.assertEqual(snapshot.stream_id, "afTqXQQhYrY")
         self.assertEqual(snapshot.viewers, 12)
 
     def test_for_handle_normalizes_prefix_and_case(self) -> None:
-        self.assertEqual(YouTubeSource.for_handle("@MKBHD").name, "youtube:mkbhd")
-        self.assertEqual(YouTubeSource.for_handle("  ltt ").name, "youtube:ltt")
+        self.assertEqual(YouTubeSource.for_handle("@MKBHD").target.key, "youtube:mkbhd")
+        self.assertEqual(YouTubeSource.for_handle("  ltt ").target.key, "youtube:ltt")
 
     def test_for_handle_rejects_unusable_handle(self) -> None:
         # Full accept/reject matrix lives in test_models.NormalizeHandleTests;
@@ -192,8 +193,11 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
             source = YouTubeSource.for_handle("@x")
 
             with self.assertLogs("youtube_live_count_chime", "WARNING"):
-                snapshot = await anext(source.snapshots())
+                polls = source.snapshots()
+                self.assertIsNone(await anext(polls))  # the failure is reported
+                snapshot = await anext(polls)
 
+        assert snapshot is not None
         self.assertEqual(fetcher.call_count, 2)
         self.assertEqual(snapshot.viewers, 7)
 

@@ -64,6 +64,11 @@ class StreamTarget:
         """Return a stable identifier for this target."""
         return f"{self.platform}:{self.name}"
 
+    @property
+    def label(self) -> str:
+        """Return this target as displayed to a human, e.g. ``twitch mkbhd``."""
+        return f"{self.platform} {self.name}"
+
 
 @dataclass(frozen=True, slots=True)
 class StreamSnapshot:
@@ -89,20 +94,30 @@ class StreamSource(Protocol):
     """An asynchronous source of stream snapshots."""
 
     @property
-    def name(self) -> str:
-        """Return a stable display name for this source."""
+    def target(self) -> StreamTarget:
+        """Return the channel this source polls."""
 
-    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
-        """Yield successive stream snapshots."""
+    def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
+        """Yield successive stream snapshots, or ``None`` entering an outage.
+
+        A sustained outage marks ``None`` once, not once per failed poll, so
+        a consumer's response to it must be idempotent — it will not be
+        reminded again until a successful poll re-arms the marker.
+        """
 
 
 async def poll_snapshots(
     name: str, fetch: Callable[[], StreamSnapshot]
-) -> AsyncIterator[StreamSnapshot]:
+) -> AsyncIterator[StreamSnapshot | None]:
     """Poll ``fetch`` forever, yielding snapshots and surviving fetch failures.
 
-    An unreachable channel fails every poll, so warn only on the transition
-    *into* failure; a successful poll re-arms it for the next distinct outage.
+    Entering an outage yields ``None`` once: the channel is *unknown*, which
+    is not ``StreamSnapshot.offline()`` ("confirmed not streaming"). Saying
+    nothing at all would leave the consumer publishing pre-outage state as
+    current, but repeating it every poll would say nothing new — the
+    consumer's response is idempotent, so only the transition carries
+    information. A successful poll re-arms both the warning and the marker
+    for the next distinct outage.
     """
     warned = False
     while True:
@@ -113,6 +128,7 @@ async def poll_snapshots(
                 # `name` already carries the platform, e.g. "youtube:mkbhd".
                 _LOGGER.warning("could not fetch %s: %s", name, error)
                 warned = True
+                yield None
         else:
             warned = False
             yield snapshot

@@ -220,7 +220,6 @@ class TwitchClient:
 class TwitchSource:
     """An asynchronous polling source for one Twitch login."""
 
-    name: str
     target: StreamTarget
     client: TwitchClient
 
@@ -228,8 +227,8 @@ class TwitchSource:
     def for_login(cls, login: str, client: TwitchClient) -> Self:
         """Create a source that polls one Twitch login, sharing one app token."""
         target = StreamTarget(Platform.TWITCH, normalize_handle(login))
-        return cls(name=target.key, target=target, client=client)
+        return cls(target=target, client=client)
 
-    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         """Yield live/offline snapshots, retrying request failures after each poll."""
-        return poll_snapshots(self.name, lambda: self.client.stream(self.target))
+        return poll_snapshots(self.target.key, lambda: self.client.stream(self.target))
