@@ -513,9 +513,14 @@ class ChatterClientTests(unittest.TestCase):
         # it: no read, no second refresh POST, and no second telling.
         with patch("youtube_live_count_chime.chatters.get_json") as get_json:
             with self.assertNoLogs("youtube_live_count_chime.chatters", "ERROR"):
-                with self.assertRaises(TwitchAuthError):
+                with self.assertRaises(TwitchAuthError) as refused:
                     client.chatters(TOKEN)
         self.assertEqual(get_json.call_count, 0)
+        # That refusal is the *recurring* operator-facing signal, and the fault
+        # is the store: reporting a never-granted scope here would point them
+        # at --auth forever while the unwritable store went unmentioned.
+        self.assertIn("token store", str(refused.exception))
+        self.assertNotIn("not authorized", str(refused.exception))
 
     def test_a_non_401_failure_is_not_retried(self) -> None:
         client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())

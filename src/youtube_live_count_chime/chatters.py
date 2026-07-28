@@ -80,13 +80,12 @@ class ChatterClient:
 
     credentials: TwitchCredentials
     store: _TokenSaver
-    # Access tokens Helix still rejected after a refresh — a permanent 401 (the
-    # moderator:read:chatters scope was never granted). Retrying would burn a
-    # refresh rotation every poll, and Twitch rate-limits refreshes and
+    # Access tokens no later call may present, each mapped to why — so the
+    # recurring signal names the real fault, not another's. Retrying any would
+    # burn a refresh rotation every poll, and Twitch rate-limits refreshes and
     # invalidates a redeemed one, so the loop could destroy the stored grant.
-    # Keyed by the rejected token, not its login, so a token a later --auth
-    # stored is tried rather than short-circuited until the watcher restarts.
-    _unauthorized: set[str] = field(default_factory=set)
+    # Keyed by token, not login, so a later --auth's token is tried instead.
+    _refused: dict[str, str] = field(default_factory=dict)
 
     def _request(self, token: StoredToken) -> frozenset[str]:
         # The broadcaster reading their own channel: moderator_id == broadcaster_id.
@@ -141,10 +140,11 @@ class ChatterClient:
             self.store.save(rotated)
         except TokenStoreError:
             # The POST above redeemed the old refresh token, so the previous
-            # grant is dead and the rotated one is now lost. Later polls would
-            # re-present the stale stored token and refresh against a redeemed
-            # one; memoize it, on the same one-telling path as a permanent 401.
-            self._unauthorized.add(token.access_token)
+            # grant is dead and the rotated one is lost; refuse the stale stored
+            # token rather than refresh against a redeemed one every poll.
+            self._refused[token.access_token] = (
+                f"the token store could not save {token.login}'s refreshed token"
+            )
             _LOGGER.error(
                 "Could not store the refreshed Twitch token for %s, and the "
                 "previous one is no longer valid. Repair the token store, then "
@@ -156,13 +156,10 @@ class ChatterClient:
             raise
         return rotated
 
-    def _unauthorized_error(self, login: str) -> TwitchAuthError:
-        return TwitchAuthError(f"{login} is not authorized to read its own chat roster")
-
     def chatters(self, token: StoredToken) -> frozenset[str]:
         """Return the chat roster, refreshing the user token once after HTTP 401."""
-        if token.access_token in self._unauthorized:
-            raise self._unauthorized_error(token.login)
+        if token.access_token in self._refused:
+            raise TwitchAuthError(self._refused[token.access_token])
         try:
             return self._request(token)
         except HTTPError as error:
@@ -179,9 +176,10 @@ class ChatterClient:
                     f"Twitch chatters request failed (HTTP {error.code})"
                 ) from error
             # A freshly refreshed token rejected again is permanent, not an
-            # expiry. Remember both: the rotated one is what the store now
-            # holds, the original what a stale caller would present.
-            self._unauthorized.update((token.access_token, rotated.access_token))
+            # expiry. Refuse both: the rotated one is what the store now holds,
+            # the original what a stale caller would present.
+            refusal = f"{token.login} is not authorized to read its own chat roster"
+            self._refused.update({token.access_token: refusal, rotated.access_token: refusal})
             _LOGGER.error(
                 "Twitch refuses the chat roster for %s. Run --auth %s again, "
                 "signed in as the broadcaster, to grant the %s scope. Arrivals "
@@ -190,7 +188,7 @@ class ChatterClient:
                 token.login,
                 CHATTERS_SCOPE,
             )
-            raise self._unauthorized_error(token.login) from error
+            raise TwitchAuthError(refusal) from error
 
 
 @dataclass(slots=True)
