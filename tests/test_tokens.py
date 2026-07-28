@@ -110,7 +110,7 @@ class TokenStoreTests(unittest.TestCase):
         with patch(
             "youtube_live_count_chime.tokens.json.dump", side_effect=OSError("disk full")
         ):
-            with self.assertRaises(OSError):
+            with self.assertRaises(TokenStoreError):
                 store.save(_token("samtriestobuild"))
 
         reloaded = TokenStore(self.path)
@@ -122,6 +122,22 @@ class TokenStoreTests(unittest.TestCase):
         self.assertEqual(
             sorted(p.name for p in Path(self._dir.name).iterdir()), ["tokens.json"]
         )
+
+    def test_an_unwritable_location_fails_as_a_store_error_not_a_bare_oserror(
+        self,
+    ) -> None:
+        # Callers absorb TokenStoreError as a degradation and let everything
+        # else through to the watcher's fail-loud boundary. A write that cannot
+        # land — an unwritable ~/.config, a full disk, a parent path occupied
+        # by a file — is a store failure, not a bug, so it must not escape as a
+        # bare OSError and cancel every watched channel. (A regular file where
+        # the parent directory should be reproduces that without depending on
+        # permissions, which do not constrain a root test runner.)
+        blocked = Path(self._dir.name) / "count-chime"
+        blocked.write_text("", encoding="utf-8")
+
+        with self.assertRaises(TokenStoreError):
+            TokenStore(blocked / "tokens.json").save(_token("watchmepivot"))
 
     def test_concurrent_saves_keep_both_accounts(self) -> None:
         # Both watched channels refresh through one store from their own

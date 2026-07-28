@@ -18,7 +18,13 @@ _FIELDS: Final = ("login", "user_id", "access_token", "refresh_token")
 
 
 class TokenStoreError(RuntimeError):
-    """Raised when the token file exists but cannot be used."""
+    """Raised when the token file cannot be read or written.
+
+    Every store failure wears this type, reads and writes alike: callers absorb
+    it as a degradation, and a bare OSError escaping a write (an unwritable
+    ~/.config, ENOSPC, EACCES) would instead reach the monitor's boundary and
+    tear down every watched channel over a token-file problem.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,8 +85,11 @@ class TokenStore:
         with self._lock:
             tokens = self._load()
             tokens[token.login] = token
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._write(tokens)
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self._write(tokens)
+            except OSError as error:
+                raise TokenStoreError(f"could not write {self.path}: {error}") from error
 
     def _write(self, tokens: dict[str, StoredToken]) -> None:
         """Replace the store with ``tokens``, atomically and owner-only."""

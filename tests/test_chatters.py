@@ -1,5 +1,7 @@
 import unittest
 from email.message import Message
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -9,7 +11,7 @@ from youtube_live_count_chime.chatters import (
     parse_chatters,
 )
 from youtube_live_count_chime.models import Platform, StreamTarget
-from youtube_live_count_chime.tokens import StoredToken, TokenStoreError
+from youtube_live_count_chime.tokens import StoredToken, TokenStore, TokenStoreError
 from youtube_live_count_chime.twitch import (
     TwitchAuthError,
     TwitchCredentials,
@@ -322,6 +324,39 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         namer = TwitchChatterNamer(_FakeClient([]), _ExplodingStore())
 
         self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+
+    async def test_an_unwritable_store_during_a_refresh_degrades_to_no_names(
+        self,
+    ) -> None:
+        # The hot path: user tokens expire every few hours, so 401 -> refresh ->
+        # save runs constantly. This wires the *real* TokenStore in as the
+        # client's saver — the fakes above raise TokenStoreError directly and so
+        # cannot see a store that lets a bare OSError out, which the monitor
+        # would wrap as "source X failed" and use to cancel every channel.
+        with TemporaryDirectory() as tmp:
+            # A regular file where the config directory should be: the write
+            # cannot land, for root or anyone else.
+            blocked = Path(tmp) / "count-chime"
+            blocked.write_text("", encoding="utf-8")
+            client = ChatterClient(
+                TwitchCredentials("id", "secret"), TokenStore(blocked / "tokens.json")
+            )
+            responses: list[object] = [
+                HTTPError("https://api.twitch.tv", 401, "nope", Message(), None),
+                {"access_token": "fresh-placeholder", "refresh_token": "rotated"},
+            ]
+
+            def fake_get_json(request: object) -> object:
+                item = responses.pop(0)
+                if isinstance(item, HTTPError):
+                    raise item
+                return item
+
+            namer = TwitchChatterNamer(client, _FakeStore(TOKEN))
+            with patch(
+                "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
+            ):
+                self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
 
 
 class _RecordingStore:
