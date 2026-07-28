@@ -134,6 +134,59 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         # stream_id but kept the old roster would wrongly report joe_doe here.
         self.assertEqual(await namer.arrivals(TARGET, "stream-2"), ("amy",))
 
+    async def test_a_read_after_an_outage_reseeds_instead_of_diffing_across_it(
+        self,
+    ) -> None:
+        # A roster kept across a failure is a *pre-outage* sample: diffing the
+        # next successful read against it names everyone who joined while the
+        # watcher was blind, as if they had just arrived.
+        class _FlakyClient:
+            def __init__(self, responses: list[frozenset[str] | Exception]) -> None:
+                self._responses = responses
+
+            def chatters(self, token: StoredToken) -> frozenset[str]:
+                item = self._responses.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+
+        for outage in (
+            TwitchRequestError("chatters unavailable"),
+            TokenStoreError("token file is not writable"),
+        ):
+            with self.subTest(outage=type(outage).__name__):
+                client = _FlakyClient(
+                    [
+                        frozenset({"lurker"}),  # seeds
+                        outage,  # blind: joe_doe joins during this gap
+                        frozenset({"lurker", "joe_doe"}),  # first read back
+                    ]
+                )
+                namer = TwitchChatterNamer(client, _FakeStore(TOKEN))
+                await namer.arrivals(TARGET, "stream-1")
+                await namer.arrivals(TARGET, "stream-1")
+
+                self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+
+    async def test_an_absent_token_also_reseeds_the_next_successful_read(self) -> None:
+        # Same gap, different cause: --auth revoked mid-broadcast and restored.
+        class _IntermittentStore:
+            def __init__(self) -> None:
+                self.token: StoredToken | None = TOKEN
+
+            def get(self, login: str) -> StoredToken | None:
+                return self.token
+
+        store = _IntermittentStore()
+        client = _FakeClient([frozenset({"lurker"}), frozenset({"lurker", "joe_doe"})])
+        namer = TwitchChatterNamer(client, store)
+        await namer.arrivals(TARGET, "stream-1")
+        store.token = None
+        await namer.arrivals(TARGET, "stream-1")
+        store.token = TOKEN
+
+        self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+
     async def test_unauthorized_channel_yields_no_names_without_calling_out(
         self,
     ) -> None:
@@ -335,6 +388,39 @@ class ChatterClientTests(unittest.TestCase):
         # No read, no refresh POST, no token-file rewrite, and told only once.
         self.assertEqual(get_json.call_count, 0)
         self.assertEqual(len(store.saved), 1)
+
+    def test_a_token_stored_by_a_later_auth_is_tried_rather_than_short_circuited(
+        self,
+    ) -> None:
+        # Re-running --auth is the documented repair for a permanent 401. If
+        # the memo were keyed by login, the running watcher would keep refusing
+        # to read the roster with the freshly granted token until restarted.
+        client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())
+        refused: list[object] = [
+            self._http_error(401),
+            {"access_token": "rotated-placeholder", "refresh_token": "r"},
+            self._http_error(401),  # permanent: memoized
+        ]
+
+        def fake_get_json(request: object) -> object:
+            item = refused.pop(0)
+            if isinstance(item, HTTPError):
+                raise item
+            return item
+
+        with patch(
+            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
+        ):
+            with self.assertLogs("youtube_live_count_chime.chatters", "ERROR"):
+                with self.assertRaises(TwitchAuthError):
+                    client.chatters(TOKEN)
+
+        granted = StoredToken("watchmepivot", "42", "granted-placeholder", "r2")
+        with patch(
+            "youtube_live_count_chime.chatters.get_json",
+            return_value={"data": [{"user_login": "joe_doe"}]},
+        ):
+            self.assertEqual(client.chatters(granted), frozenset({"joe_doe"}))
 
     def test_a_non_401_failure_is_not_retried(self) -> None:
         client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())

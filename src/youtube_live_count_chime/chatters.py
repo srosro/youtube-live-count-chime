@@ -80,12 +80,14 @@ class ChatterClient:
 
     credentials: TwitchCredentials
     store: _TokenSaver
-    # Logins whose token was still rejected after a refresh. Helix answers 401
-    # for permanent conditions too (the moderator:read:chatters scope was never
-    # granted, or the authorized user is neither the broadcaster nor a
-    # moderator), and retrying those would burn a refresh rotation on every
-    # poll — Twitch rate-limits refreshes and invalidates a redeemed refresh
-    # token, so the loop could eventually destroy the stored grant.
+    # Access tokens Helix still rejected after a refresh. Helix answers 401 for
+    # permanent conditions too (the moderator:read:chatters scope was never
+    # granted, or the authorized user is not the broadcaster), and retrying
+    # those would burn a refresh rotation on every poll — Twitch rate-limits
+    # refreshes and invalidates a redeemed refresh token, so the loop could
+    # eventually destroy the stored grant. Keyed by the rejected token rather
+    # than by its login, so a token a later --auth stored is tried instead of
+    # short-circuited until the watcher is restarted.
     _unauthorized: set[str] = field(default_factory=set)
 
     def _request(self, token: StoredToken) -> frozenset[str]:
@@ -145,7 +147,7 @@ class ChatterClient:
 
     def chatters(self, token: StoredToken) -> frozenset[str]:
         """Return the chat roster, refreshing the user token once after HTTP 401."""
-        if token.login in self._unauthorized:
+        if token.access_token in self._unauthorized:
             raise self._unauthorized_error(token.login)
         try:
             return self._request(token)
@@ -154,21 +156,23 @@ class ChatterClient:
                 raise TwitchRequestError(
                     f"Twitch chatters request failed (HTTP {error.code})"
                 ) from error
+        rotated = self._refresh(token)
         try:
-            return self._request(self._refresh(token))
+            return self._request(rotated)
         except HTTPError as error:
             if error.code != 401:
                 raise TwitchRequestError(
                     f"Twitch chatters request failed (HTTP {error.code})"
                 ) from error
             # A freshly refreshed token rejected again is a permanent 401, not
-            # an expiry. Remember it so no further poll retries: logged once.
-            self._unauthorized.add(token.login)
+            # an expiry. Remember both so no further poll retries: the rotated
+            # one is what the store now holds, and the original is what a
+            # caller holding a pre-refresh copy would present. Logged once.
+            self._unauthorized.update((token.access_token, rotated.access_token))
             _LOGGER.error(
                 "Twitch refuses the chat roster for %s. Run --auth %s again, "
-                "signed in as an account that is the broadcaster or one of its "
-                "moderators, to grant the %s scope. Arrivals on that channel "
-                "will not be named until then.",
+                "signed in as the broadcaster, to grant the %s scope. Arrivals "
+                "on that channel will not be named until then.",
                 token.login,
                 token.login,
                 CHATTERS_SCOPE,
@@ -176,32 +180,46 @@ class ChatterClient:
             raise self._unauthorized_error(token.login) from error
 
 
+@dataclass(slots=True)
+class _ChannelState:
+    """What is remembered about one channel between polls, invalidated as a unit.
+
+    ``roster`` is dropped by every failure path, so the next successful read
+    reseeds instead of diffing across the gap and naming someone who joined
+    during it. ``cause`` is the outage currently being suffered: the monitor
+    samples every poll and these failures persist across polls (a channel that
+    never granted the scope, a Helix outage, a corrupt token file), so warn
+    only on the transition *into* an outage and re-arm on success. It holds the
+    *cause*, not the message — the roster branch alone raises three exceptions
+    behind one message, so keying by message would leave an operator holding
+    "Helix is down" after the real cause had become an unwritable token store.
+    """
+
+    stream_id: str | None = None
+    roster: frozenset[str] | None = None
+    cause: str | None = None
+
+
 class TwitchChatterNamer:
     """Name arrivals by diffing successive chat rosters per broadcast."""
 
-    __slots__ = ("client", "store", "_state", "_warned")
+    __slots__ = ("client", "store", "_state")
 
     def __init__(self, client: _Chatters, store: _TokenLookup) -> None:
         self.client = client
         self.store = store
-        # key -> (stream_id, roster) captured at the previous query
-        self._state: dict[str, tuple[str, frozenset[str]]] = {}
-        # key -> the message of the outage currently being suffered. The
-        # monitor samples every poll, and these failures persist across polls
-        # (a channel that never granted the scope, a Helix outage, a corrupt
-        # token file), so warn only on the transition *into* an outage; a
-        # successful read re-arms it. The stored value discriminates the
-        # *cause*, not just the target: the roster branch alone raises three
-        # different exceptions behind one message, so keying by message would
-        # leave an operator holding "Helix is down" after the real cause had
-        # become an unwritable token store. A changed cause warns again.
-        self._warned: dict[str, str] = {}
+        self._state: dict[str, _ChannelState] = {}
 
-    def _warn_once(self, key: str, message: str, error: Exception) -> None:
+    def _degrade(
+        self, state: _ChannelState, key: str, message: str, error: Exception
+    ) -> tuple[str, ...]:
+        """Drop the stale roster, warn once per cause, and yield no names."""
+        state.roster = None
         cause = f"{message}:{type(error).__name__}"
-        if self._warned.get(key) != cause:
-            self._warned[key] = cause
+        if state.cause != cause:
+            state.cause = cause
             _LOGGER.warning("%s for %s: %s", message, key, error)
+        return ()
 
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
         """Return newly-seen chatters, or ``()`` when a name cannot be known."""
@@ -211,6 +229,7 @@ class TwitchChatterNamer:
             # authorized Twitch account would otherwise be named from that
             # account's chat roster. YouTube arrivals are never named.
             return ()
+        state = self._state.setdefault(target.key, _ChannelState())
         # Only the expected degradations are absorbed: a transient request
         # failure, a permanent authorization failure, and an unreadable token
         # store. Anything else is a bug, and must reach the monitor's boundary
@@ -219,9 +238,9 @@ class TwitchChatterNamer:
         try:
             token = self.store.get(target.name)
         except TokenStoreError as error:
-            self._warn_once(target.key, "could not read the token store", error)
-            return ()
+            return self._degrade(state, target.key, "could not read the token store", error)
         if token is None:
+            state.roster = None
             return ()
         try:
             current = await asyncio.to_thread(self.client.chatters, token)
@@ -232,14 +251,12 @@ class TwitchChatterNamer:
             # Twitch request, and the error log there fires once.
             # TokenStoreError can surface here too — _refresh saves the
             # rotated token through the store.
-            self._warn_once(target.key, "could not read chat roster", error)
-            return ()
-        self._warned.pop(target.key, None)
+            return self._degrade(state, target.key, "could not read chat roster", error)
 
-        previous = self._state.get(target.key)
-        self._state[target.key] = (stream_id, current)
-        # Seed on the first sight of a channel, and again on a new broadcast:
-        # diffing against the previous stream's roster would under-report.
-        if previous is None or previous[0] != stream_id:
+        # Seed on the first sight of a channel, on a new broadcast, and after
+        # any outage: diffing across those gaps reports arrivals that are not.
+        previous = state.roster if state.stream_id == stream_id else None
+        state.stream_id, state.roster, state.cause = stream_id, current, None
+        if previous is None:
             return ()
-        return tuple(sorted(current - previous[1]))
+        return tuple(sorted(current - previous))
