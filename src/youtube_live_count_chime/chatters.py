@@ -186,16 +186,19 @@ class TwitchChatterNamer:
         self.store = store
         # key -> (stream_id, roster) captured at the previous query
         self._state: dict[str, tuple[str, frozenset[str]]] = {}
-        # Target keys currently in an outage. The monitor samples every poll,
-        # and these failures persist across polls (a channel that never
-        # granted the scope, a Helix outage, a corrupt token file), so warn
-        # only on the transition *into* failure; a successful read re-arms it
-        # for the next distinct outage. Same shape as poll_snapshots.
-        self._warned: set[str] = set()
+        # key -> the message of the outage currently being suffered. The
+        # monitor samples every poll, and these failures persist across polls
+        # (a channel that never granted the scope, a Helix outage, a corrupt
+        # token file), so warn only on the transition *into* an outage; a
+        # successful read re-arms it. Keyed by message as well as target
+        # because the two call sites report different causes: a channel whose
+        # token store is repaired only to fail on the roster instead has a new
+        # diagnosis, and the operator must not be left holding the old one.
+        self._warned: dict[str, str] = {}
 
     def _warn_once(self, key: str, message: str, error: Exception) -> None:
-        if key not in self._warned:
-            self._warned.add(key)
+        if self._warned.get(key) != message:
+            self._warned[key] = message
             _LOGGER.warning("%s for %s: %s", message, key, error)
 
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
@@ -229,7 +232,7 @@ class TwitchChatterNamer:
             # rotated token through the store.
             self._warn_once(target.key, "could not read chat roster", error)
             return ()
-        self._warned.discard(target.key)
+        self._warned.pop(target.key, None)
 
         previous = self._state.get(target.key)
         self._state[target.key] = (stream_id, current)

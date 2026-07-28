@@ -202,6 +202,35 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
         self.assertEqual(len(again.records), 1)
 
+    async def test_a_change_of_cause_warns_again_with_the_new_diagnosis(self) -> None:
+        # The two failure paths report different causes, and an operator who
+        # repairs the token file only to hit a never-granted scope must be told
+        # about the second one — otherwise they are left holding a permanently
+        # wrong diagnosis while every poll fails silently.
+        class _RepairableStore:
+            def __init__(self) -> None:
+                self.corrupt = True
+
+            def get(self, login: str) -> StoredToken | None:
+                if self.corrupt:
+                    raise TokenStoreError("token file is corrupt")
+                return TOKEN
+
+        store = _RepairableStore()
+        client = _ExplodingClient(TwitchAuthError("not authorized"))
+        namer = TwitchChatterNamer(client, store)
+
+        with self.assertLogs("youtube_live_count_chime.chatters", "WARNING") as logs:
+            self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())  # cause A
+            self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())  # same: quiet
+            store.corrupt = False
+            self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())  # cause B
+            self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())  # same: quiet
+
+        self.assertEqual(len(logs.records), 2)
+        self.assertIn("could not read the token store", logs.output[0])
+        self.assertIn("could not read chat roster", logs.output[1])
+
     async def test_a_corrupt_token_store_degrades_to_no_names(self) -> None:
         # A malformed token file must not escape as an exception and kill the
         # watcher for every channel — it degrades to () like every other
