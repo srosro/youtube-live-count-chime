@@ -40,32 +40,18 @@ class _FakeStore:
 
 
 class _FakeClient:
-    """Serve queued chat rosters and count how often it was asked."""
+    """Replay scripted chatters outcomes — a roster or a raise — in order."""
 
-    def __init__(self, rosters: list[frozenset[str]]) -> None:
-        self._rosters = list(rosters)
+    def __init__(self, responses: list[frozenset[str] | Exception]) -> None:
+        self._responses = list(responses)
         self.calls = 0
 
     def chatters(self, token: StoredToken) -> frozenset[str]:
         self.calls += 1
-        return self._rosters.pop(0)
-
-
-class _ExplodingClient:
-    """A chatters read that fails the way the caller was told it might."""
-
-    def __init__(self, error: Exception) -> None:
-        self._error = error
-
-    def chatters(self, token: StoredToken) -> frozenset[str]:
-        raise self._error
-
-
-class _BuggyClient:
-    """A namer collaborator with a programming error, not a degradation."""
-
-    def chatters(self, token: StoredToken) -> frozenset[str]:
-        raise AttributeError("StoredToken has no attribute 'acess_token'")
+        item = self._responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 class _ExplodingStore:
@@ -150,22 +136,12 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         # A roster kept across a failure is a *pre-outage* sample: diffing the
         # next successful read against it names everyone who joined while the
         # watcher was blind, as if they had just arrived.
-        class _FlakyClient:
-            def __init__(self, responses: list[frozenset[str] | Exception]) -> None:
-                self._responses = responses
-
-            def chatters(self, token: StoredToken) -> frozenset[str]:
-                item = self._responses.pop(0)
-                if isinstance(item, Exception):
-                    raise item
-                return item
-
         for outage in (
             TwitchRequestError("chatters unavailable"),
             TokenStoreError("token file is not writable"),
         ):
             with self.subTest(outage=type(outage).__name__):
-                client = _FlakyClient(
+                client = _FakeClient(
                     [
                         frozenset({"lurker"}),  # seeds
                         outage,  # blind: joe_doe joins during this gap
@@ -217,7 +193,7 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
             TokenStoreError("token file is corrupt"),
         ):
             with self.subTest(error=type(error).__name__):
-                namer = TwitchChatterNamer(_ExplodingClient(error), _FakeStore(TOKEN))
+                namer = TwitchChatterNamer(_FakeClient([error]), _FakeStore(TOKEN))
 
                 self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
 
@@ -226,7 +202,8 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         # degradations. A bug must escape
         # to monitor's boundary handler instead of silently killing naming for
         # the rest of the run while the watcher reports healthy.
-        namer = TwitchChatterNamer(_BuggyClient(), _FakeStore(TOKEN))
+        bug = AttributeError("StoredToken has no attribute 'acess_token'")
+        namer = TwitchChatterNamer(_FakeClient([bug]), _FakeStore(TOKEN))
 
         with self.assertRaises(AttributeError):
             await namer.arrivals(TARGET, "stream-1")
@@ -236,18 +213,18 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         # that never granted the scope — or a Helix outage — would otherwise
         # write ~17k identical warnings a day. Warn on the transition into
         # failure only, and re-arm once a read succeeds.
-        rosters = [frozenset({"lurker"}), frozenset({"lurker", "joe_doe"})]
-
-        class _FlakyClient:
-            def __init__(self) -> None:
-                self.failing = True
-
-            def chatters(self, token: StoredToken) -> frozenset[str]:
-                if self.failing:
-                    raise TwitchRequestError("chatters unavailable")
-                return rosters.pop(0)
-
-        client = _FlakyClient()
+        outage_error = TwitchRequestError("chatters unavailable")
+        client = _FakeClient(
+            [
+                outage_error,
+                outage_error,
+                outage_error,
+                outage_error,
+                frozenset({"lurker"}),  # recovers: seeds and re-arms
+                frozenset({"lurker", "joe_doe"}),
+                outage_error,  # a second outage, after a healthy stretch
+            ]
+        )
         namer = TwitchChatterNamer(client, _FakeStore(TOKEN))
 
         with self.assertLogs("youtube_live_count_chime.chatters", "WARNING") as outage:
@@ -255,12 +232,10 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
         self.assertEqual(len(outage.records), 1)
 
-        client.failing = False
-        await namer.arrivals(TARGET, "stream-1")  # recovers: seeds and re-arms
+        await namer.arrivals(TARGET, "stream-1")
         self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ("joe_doe",))
 
         # A second, distinct outage is worth telling the operator about again.
-        client.failing = True
         with self.assertLogs("youtube_live_count_chime.chatters", "WARNING") as again:
             self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
         self.assertEqual(len(again.records), 1)
@@ -280,7 +255,7 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
                 return TOKEN
 
         store = _RepairableStore()
-        client = _ExplodingClient(TwitchAuthError("not authorized"))
+        client = _FakeClient([TwitchAuthError("not authorized")] * 2)
         namer = TwitchChatterNamer(client, store)
 
         with self.assertLogs("youtube_live_count_chime.chatters", "WARNING") as logs:
@@ -299,14 +274,7 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         # message, so keying the warn-once on the message alone would leave an
         # operator holding "Helix is down" long after the real cause had become
         # an unwritable token store during a token refresh.
-        class _CyclingClient:
-            def __init__(self, errors: list[Exception]) -> None:
-                self._errors = errors
-
-            def chatters(self, token: StoredToken) -> frozenset[str]:
-                raise self._errors.pop(0)
-
-        client = _CyclingClient(
+        client = _FakeClient(
             [
                 TwitchRequestError("chatters unavailable"),
                 TwitchRequestError("chatters unavailable"),
