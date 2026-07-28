@@ -231,6 +231,37 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("could not read the token store", logs.output[0])
         self.assertIn("could not read chat roster", logs.output[1])
 
+    async def test_a_change_of_cause_within_one_branch_also_warns_again(self) -> None:
+        # The roster branch raises three different exceptions behind a single
+        # message, so keying the warn-once on the message alone would leave an
+        # operator holding "Helix is down" long after the real cause had become
+        # an unwritable token store during a token refresh.
+        class _CyclingClient:
+            def __init__(self, errors: list[Exception]) -> None:
+                self._errors = errors
+
+            def chatters(self, token: StoredToken) -> frozenset[str]:
+                raise self._errors.pop(0)
+
+        client = _CyclingClient(
+            [
+                TwitchRequestError("chatters unavailable"),
+                TwitchRequestError("chatters unavailable"),
+                TokenStoreError("token file is not writable"),
+                TokenStoreError("token file is not writable"),
+            ]
+        )
+        namer = TwitchChatterNamer(client, _FakeStore(TOKEN))
+
+        with self.assertLogs("youtube_live_count_chime.chatters", "WARNING") as logs:
+            for _ in range(4):
+                self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+
+        # Two warnings, not one (message-keyed) and not four (no warn-once).
+        self.assertEqual(len(logs.records), 2)
+        self.assertIn("chatters unavailable", logs.output[0])
+        self.assertIn("token file is not writable", logs.output[1])
+
     async def test_a_corrupt_token_store_degrades_to_no_names(self) -> None:
         # A malformed token file must not escape as an exception and kill the
         # watcher for every channel — it degrades to () like every other

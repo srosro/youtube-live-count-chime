@@ -190,15 +190,17 @@ class TwitchChatterNamer:
         # monitor samples every poll, and these failures persist across polls
         # (a channel that never granted the scope, a Helix outage, a corrupt
         # token file), so warn only on the transition *into* an outage; a
-        # successful read re-arms it. Keyed by message as well as target
-        # because the two call sites report different causes: a channel whose
-        # token store is repaired only to fail on the roster instead has a new
-        # diagnosis, and the operator must not be left holding the old one.
+        # successful read re-arms it. The stored value discriminates the
+        # *cause*, not just the target: the roster branch alone raises three
+        # different exceptions behind one message, so keying by message would
+        # leave an operator holding "Helix is down" after the real cause had
+        # become an unwritable token store. A changed cause warns again.
         self._warned: dict[str, str] = {}
 
     def _warn_once(self, key: str, message: str, error: Exception) -> None:
-        if self._warned.get(key) != message:
-            self._warned[key] = message
+        cause = f"{message}:{type(error).__name__}"
+        if self._warned.get(key) != cause:
+            self._warned[key] = cause
             _LOGGER.warning("%s for %s: %s", message, key, error)
 
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
