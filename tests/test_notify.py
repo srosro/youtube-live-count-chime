@@ -14,6 +14,12 @@ class PostNotificationTests(unittest.TestCase):
         self.assertEqual(command[0], "/usr/bin/osascript")
         # Body then title, positionally, after the argv separator.
         self.assertEqual(command[-3:], ("--", "a body", "a title"))
+        # The bounded wait and the failure detection the tests below rest on:
+        # without them a wedged Notification Center blocks the calling thread
+        # forever and a non-zero exit becomes a silent no-op, both with the
+        # rest of this suite still green.
+        self.assertEqual(run.call_args.kwargs["timeout"], 10.0)
+        self.assertIs(run.call_args.kwargs["check"], True)
 
         # Notification text is not ours to trust. It must reach AppleScript as
         # a single opaque argv element, never as script text.

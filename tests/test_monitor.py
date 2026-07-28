@@ -158,11 +158,18 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         # is a pre-outage sample. Keeping it would chime "10 -> 500" on the first
         # read back — a delta measured across an unbounded gap. Clearing the
         # baseline makes the recovery poll re-baseline silently instead; only
-        # the genuine 500 -> 502 rise after it chimes.
+        # the genuine 500 -> 502 rise after it chimes. A sustained outage is
+        # consecutive `None`s (poll_snapshots yields one per failed poll), and
+        # a leading one arrives before any baseline exists.
         a = StreamTarget(Platform.TWITCH, "chan")
         played: list[Path] = []
         await monitor(
-            [FakeSource(a, [live(a, 10), None, live(a, 500), live(a, 502)])],
+            [
+                FakeSource(
+                    a,
+                    [None, None, live(a, 10), None, None, live(a, 500), live(a, 502)],
+                )
+            ],
             ChimeConfig(UP, DOWN),
             play=played.append,
             notify=silent,
