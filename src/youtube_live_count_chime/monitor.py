@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from youtube_live_count_chime.digest import render_roster, render_title
+from youtube_live_count_chime.digest import render_roster
 from youtube_live_count_chime.models import StreamSnapshot, StreamSource, StreamTarget
 from youtube_live_count_chime.notify import NotificationError, post_notification
 from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
@@ -59,7 +59,7 @@ async def monitor(
         roster inside the lock means whichever posts last is also the freshest.
         """
         async with notify_lock:
-            title = render_title(target, delta)
+            title = f"+{delta} watching {target.label}"
             try:
                 await asyncio.to_thread(notify, title, render_roster(order, counts))
             except NotificationError as error:

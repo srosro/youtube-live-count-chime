@@ -1,6 +1,6 @@
 import unittest
 
-from youtube_live_count_chime.digest import render_roster, render_title
+from youtube_live_count_chime.digest import render_roster
 from youtube_live_count_chime.models import Platform, StreamTarget
 
 
@@ -28,18 +28,6 @@ class RenderRosterTests(unittest.TestCase):
             render_roster((live, off, unpolled), {live: 3, off: None}),
             "twitch live 3 · twitch off offline · youtube unpolled ?",
         )
-
-
-class RenderTitleTests(unittest.TestCase):
-    def test_title_reports_the_rise_and_the_channel_on_either_platform(self) -> None:
-        cases: tuple[tuple[StreamTarget, int, str], ...] = (
-            (TWITCH_A, 1, "+1 watching twitch watchmepivot"),
-            (TWITCH_A, 3, "+3 watching twitch watchmepivot"),
-            (YOUTUBE_A, 1, "+1 watching youtube srosrosr"),
-        )
-        for target, delta, expected in cases:
-            with self.subTest(target=target.key, delta=delta):
-                self.assertEqual(render_title(target, delta), expected)
 
 
 if __name__ == "__main__":

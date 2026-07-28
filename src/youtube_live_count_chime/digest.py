@@ -32,8 +32,3 @@ def render_roster(
         shown = "offline" if viewers is None else str(viewers)
         parts.append(f"{target.label} {shown}")
     return _SEPARATOR.join(parts)
-
-
-def render_title(target: StreamTarget, delta: int) -> str:
-    """Render the banner title for a rise of ``delta`` on ``target``."""
-    return f"+{delta} watching {target.label}"
