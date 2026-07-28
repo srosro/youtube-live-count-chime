@@ -63,7 +63,12 @@ async def monitor(
                     # the baseline so the first poll back cannot be a rise —
                     # which is what keeps recovery from chiming a gap-wide
                     # delta. Recovery re-baselines silently, at one lost chime
-                    # per failed poll.
+                    # per outage.
+                    #
+                    # This branch must stay idempotent: a sustained outage
+                    # marks `None` once, not once per poll, so anything
+                    # stateful added here (an outage counter, a gap-length
+                    # rule) would silently stop being fed.
                     counts.pop(source.target, None)
                     previous = None
                     continue

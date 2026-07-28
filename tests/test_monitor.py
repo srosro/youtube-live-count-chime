@@ -17,7 +17,12 @@ DOWN = Path("/System/Library/Sounds/Basso.aiff")
 
 
 class FakeSource:
-    """Replay scripted polls; a ``None`` entry is a poll whose fetch failed."""
+    """Replay scripted polls; a ``None`` entry marks entering an outage.
+
+    Consecutive ``None``s are not what the real producer emits — it marks
+    once per outage — but driving them here is what pins the consumer's
+    idempotence, which that suppression depends on.
+    """
 
     def __init__(
         self, target: StreamTarget, snaps: Sequence[StreamSnapshot | None]
@@ -204,9 +209,10 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         # is a pre-outage sample. Keeping it would chime "10 -> 500" on the first
         # read back — a delta measured across an unbounded gap. Clearing the
         # baseline makes the recovery poll re-baseline silently instead; only
-        # the genuine 500 -> 502 rise after it chimes. A sustained outage is
-        # consecutive `None`s (poll_snapshots yields one per failed poll), and
-        # a leading one arrives before any baseline exists.
+        # the genuine 500 -> 502 rise after it chimes. The consecutive
+        # `None`s here exceed what poll_snapshots emits (it marks once per
+        # outage) precisely to pin that repeats stay a no-op, and a leading
+        # one arrives before any baseline exists.
         a = StreamTarget(Platform.TWITCH, "chan")
         played: list[Path] = []
         buffer = io.StringIO()

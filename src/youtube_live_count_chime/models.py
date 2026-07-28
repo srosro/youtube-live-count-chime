@@ -98,7 +98,12 @@ class StreamSource(Protocol):
         """Return the channel this source polls."""
 
     def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
-        """Yield successive stream snapshots, or ``None`` for a failed poll."""
+        """Yield successive stream snapshots, or ``None`` entering an outage.
+
+        A sustained outage marks ``None`` once, not once per failed poll, so
+        a consumer's response to it must be idempotent — it will not be
+        reminded again until a successful poll re-arms the marker.
+        """
 
 
 async def poll_snapshots(
