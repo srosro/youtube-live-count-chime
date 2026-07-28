@@ -8,13 +8,18 @@ from youtube_live_count_chime.notify import NotificationError, post_notification
 
 class PostNotificationTests(unittest.TestCase):
     def test_runs_osascript_bounded_and_checked_with_text_as_argv(self) -> None:
+        # Notification text is not ours to trust, so the title carries an
+        # injection attempt throughout: it must reach AppleScript as a single
+        # opaque argv element, never as script text.
+        hostile = '" & (do shell script "touch /tmp/pwned") & "'
         with patch("youtube_live_count_chime.notify.subprocess.run") as run:
-            post_notification("a title", "a body")
+            post_notification(hostile, "a body")
 
         command = run.call_args.args[0]
         self.assertEqual(command[0], "/usr/bin/osascript")
         # Body then title, positionally, after the argv separator.
-        self.assertEqual(command[-3:], ("--", "a body", "a title"))
+        self.assertEqual(command[-3:], ("--", "a body", hostile))
+        self.assertNotIn(hostile, " ".join(command[:-1]))
         # The bounded wait and the failure detection the tests below rest on:
         # without them a wedged Notification Center blocks the calling thread
         # forever and a non-zero exit becomes a silent no-op, both with the
@@ -28,16 +33,6 @@ class PostNotificationTests(unittest.TestCase):
         self.assertLessEqual(timeout, 2 * POLL_INTERVAL_SECONDS)
         self.assertGreater(timeout, POLL_INTERVAL_SECONDS / 5)
         self.assertIs(run.call_args.kwargs["check"], True)
-
-        # Notification text is not ours to trust. It must reach AppleScript as
-        # a single opaque argv element, never as script text.
-        hostile = '" & (do shell script "touch /tmp/pwned") & "'
-        with patch("youtube_live_count_chime.notify.subprocess.run") as run:
-            post_notification(hostile, "body")
-
-        command = run.call_args.args[0]
-        self.assertEqual(command[-3:], ("--", "body", hostile))
-        self.assertNotIn(hostile, " ".join(command[:-1]))
 
     def test_failure_becomes_notification_error_without_the_notification_text(
         self,
