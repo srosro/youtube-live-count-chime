@@ -12,7 +12,7 @@ class SpeakTextTests(unittest.TestCase):
         # trust: it must reach say(1) as a single opaque argv element, never as
         # shell text or as a flag.
         hostile = "-o /tmp/pwned; touch /tmp/pwned"
-        with patch("youtube_live_count_chime.speech.subprocess.run") as run:
+        with patch("youtube_live_count_chime.macos.subprocess.run") as run:
             speak_text(hostile)
 
         command = run.call_args.args[0]
@@ -35,7 +35,7 @@ class SpeakTextTests(unittest.TestCase):
         for failure in failures:
             with self.subTest(failure=type(failure).__name__):
                 with patch(
-                    "youtube_live_count_chime.speech.subprocess.run", side_effect=failure
+                    "youtube_live_count_chime.macos.subprocess.run", side_effect=failure
                 ):
                     with self.assertRaises(SpeechError) as ctx:
                         speak_text("2 new viewers on twitch chan")

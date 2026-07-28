@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-import subprocess
 from typing import Final
+
+from youtube_live_count_chime.macos import MACOS_COMMAND_FAILURES, run_macos_command
 
 
 # Bounds a wedged afplay, which would otherwise hold the shared audio lock
@@ -21,17 +22,6 @@ class SoundPlaybackError(RuntimeError):
 def play_sound(path: Path) -> None:
     """Play one sound synchronously with the macOS system audio player."""
     try:
-        subprocess.run(
-            ("/usr/bin/afplay", str(path)),
-            check=True,
-            timeout=_TIMEOUT_SECONDS,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except (
-        OSError,
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
-    ) as error:
+        run_macos_command(("/usr/bin/afplay", str(path)), timeout=_TIMEOUT_SECONDS)
+    except MACOS_COMMAND_FAILURES as error:
         raise SoundPlaybackError(f"could not play {path}: {error}") from error

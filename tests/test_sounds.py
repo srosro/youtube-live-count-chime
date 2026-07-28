@@ -13,7 +13,7 @@ from youtube_live_count_chime.sounds import (
 
 class PlaySoundTests(unittest.TestCase):
     def test_invokes_afplay_with_the_path(self) -> None:
-        with patch("youtube_live_count_chime.sounds.subprocess.run") as run:
+        with patch("youtube_live_count_chime.macos.subprocess.run") as run:
             play_sound(Path("/sounds/up.aiff"))
 
         run.assert_called_once_with(
@@ -39,7 +39,7 @@ class PlaySoundTests(unittest.TestCase):
         for failure in failures:
             with self.subTest(failure=type(failure).__name__):
                 with patch(
-                    "youtube_live_count_chime.sounds.subprocess.run", side_effect=failure
+                    "youtube_live_count_chime.macos.subprocess.run", side_effect=failure
                 ):
                     with self.assertRaises(SoundPlaybackError):
                         play_sound(Path("/sounds/up.aiff"))

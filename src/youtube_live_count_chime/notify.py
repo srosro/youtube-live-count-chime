@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
 from typing import Final
 
+from youtube_live_count_chime.macos import MACOS_COMMAND_FAILURES, run_macos_command
 from youtube_live_count_chime.models import POLL_INTERVAL_SECONDS
 
 
@@ -20,6 +20,11 @@ _SCRIPT_LINES: Final = (
     "end run",
 )
 
+# The caller awaits this inside its poll loop, so a wedged Notification Center
+# costs that one channel a single extra poll interval — and it still cannot
+# hang the watcher.
+_TIMEOUT_SECONDS: Final = POLL_INTERVAL_SECONDS
+
 
 class NotificationError(RuntimeError):
     """Raised when macOS cannot post a notification."""
@@ -27,23 +32,12 @@ class NotificationError(RuntimeError):
 
 def post_notification(title: str, body: str) -> None:
     """Post one notification, passing text as argv rather than script source."""
-    command: list[str] = [_OSASCRIPT]
-    for line in _SCRIPT_LINES:
-        command += ["-e", line]
-    command += ["--", body, title]
+    script = [arg for line in _SCRIPT_LINES for arg in ("-e", line)]
     try:
-        subprocess.run(
-            tuple(command),
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            # The caller awaits this inside its poll loop, so a wedged
-            # Notification Center costs that one channel a single extra poll
-            # interval — and it still cannot hang the watcher.
-            timeout=POLL_INTERVAL_SECONDS,
+        run_macos_command(
+            (_OSASCRIPT, *script, "--", body, title), timeout=_TIMEOUT_SECONDS
         )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+    except MACOS_COMMAND_FAILURES as error:
         # These exceptions render the whole argv, and the argv carries the
         # notification text — every watched channel's current count, which the
         # LaunchAgent redirects into its log file.
