@@ -38,34 +38,39 @@ async def monitor(
     A rise also posts a macOS notification. The roster of current counts is
     shared across consumers, so every notification carries the same
     fixed-shape digest of every watched channel. The chime fires first,
-    unconditionally, and awaited; the banner is only scheduled, so a slow
-    osascript call never stretches the channel's poll cadence. Playback and
-    notification failures are each warned and skipped so one channel's glitch
-    never stops the watcher: a failed notification still leaves the chime
-    played, and neither costs the other channels. Any other exception
-    escaping a source is an unexpected bug: the TaskGroup cancels the
-    siblings and ``main`` reports it (named with the channel) and exits
-    non-zero.
+    unconditionally, and awaited; the banner only fills a coalescing slot, so
+    a slow osascript neither stretches the poll cadence nor stacks a backlog
+    of stale banners. Playback and notification failures are each warned and
+    skipped so one channel's glitch never stops the watcher: a failed
+    notification still leaves the chime played, and neither costs the other
+    channels. Any other exception escaping a source is an unexpected bug: the
+    TaskGroup cancels the siblings and ``main`` reports it (named with the
+    channel) and exits non-zero.
     """
     chime_lock = asyncio.Lock()
-    notify_lock = asyncio.Lock()
     order = tuple(source.target for source in sources)
     counts: dict[StreamTarget, int | None] = {}
+    pending: tuple[StreamTarget, int, str] | None = None
+    sending = False
 
-    async def send(target: StreamTarget, delta: int) -> None:
-        """Post one banner, serialized so the last one shown is the newest.
+    async def send() -> None:
+        """Drain the slot: at most one banner in flight, and one pending.
 
-        Concurrent sends could otherwise complete out of order; rendering the
-        roster inside the lock means whichever posts last is also the freshest.
+        Rises arriving during a slow osascript overwrite the slot instead of
+        queueing behind it, so superseded ones are dropped, not posted late.
         """
-        async with notify_lock:
-            title = f"+{delta} watching {target.label}"
+        nonlocal pending, sending
+        while pending is not None:
+            target, delta, roster = pending
+            pending = None
             try:
-                await asyncio.to_thread(notify, title, render_roster(order, counts))
+                await asyncio.to_thread(notify, f"+{delta} watching {target.label}", roster)
             except NotificationError as error:
                 _LOGGER.warning("could not notify for %s: %s", target.key, error)
+        sending = False
 
     async def consume(source: StreamSource) -> None:
+        nonlocal pending, sending
         previous: StreamSnapshot | None = None
         try:
             async for snapshot in source.snapshots():
@@ -112,8 +117,14 @@ async def monitor(
                                 "could not play chime for %s: %s", source.target.key, error
                             )
                     if rising:
-                        # Not awaited: polling resumes now, TaskGroup joins it.
-                        group.create_task(send(source.target, delta))
+                        # Overwrite rather than queue, freezing the roster with
+                        # the delta so both halves describe this one moment.
+                        pending = (source.target, delta, render_roster(order, counts))
+                        if not sending:
+                            # Not awaited: polling resumes now, TaskGroup joins
+                            # it. An already-running sender needs no task.
+                            sending = True
+                            group.create_task(send())
                 previous = snapshot
         except Exception as error:
             # Name the channel in the failure that main will report.

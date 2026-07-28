@@ -280,6 +280,85 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events, ["polled", "notified"])
 
+    async def test_rises_arriving_during_a_send_coalesce_instead_of_stacking(
+        self,
+    ) -> None:
+        # Delivery is bounded but real (10s) while rises can arrive every poll
+        # interval, so one task per rise has no back-pressure at all: the
+        # banners pile up and each eventually posts a delta measured minutes
+        # earlier. Coalescing keeps at most one send in flight and one pending,
+        # so five rises inside a single slow send post at most twice — and the
+        # banner that does post is the newest, not the oldest.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        all_polled = asyncio.Event()
+        release = threading.Event()
+        posted: list[tuple[str, str]] = []
+
+        def slow(title: str, body: str) -> None:
+            # Bounded so a regression fails an assertion, not the clock.
+            release.wait(5.0)
+            posted.append((title, body))
+
+        async def release_once_polled() -> None:
+            await all_polled.wait()
+            release.set()
+
+        rises = [live(a, count) for count in range(1, 7)]
+        await asyncio.gather(
+            monitor(
+                [LeadingSource(a, rises, all_polled)],
+                ChimeConfig(UP, DOWN),
+                play=lambda path: None,
+                notify=slow,
+            ),
+            release_once_polled(),
+        )
+
+        self.assertLessEqual(len(posted), 2)  # one in flight plus one pending
+        self.assertNotEqual(posted, [])  # but the rise is not simply dropped
+        self.assertEqual(posted[-1], ("+1 watching twitch chan", "twitch chan 6"))
+
+    async def test_a_coalesced_banner_pairs_its_delta_with_its_own_roster(self) -> None:
+        # A banner's two halves must describe one moment. Freezing the title at
+        # rise time while rendering the roster at post time lets a queued
+        # banner read "+1" over a body showing that channel far higher. Each
+        # count below is reachable by exactly one delta, so any banner whose
+        # title and body disagree is a banner assembled from two moments.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        all_polled = asyncio.Event()
+        release = threading.Event()
+        posted: list[tuple[str, str]] = []
+
+        def slow(title: str, body: str) -> None:
+            release.wait(5.0)
+            posted.append((title, body))
+
+        async def release_once_polled() -> None:
+            await all_polled.wait()
+            release.set()
+
+        delta_for = {2: 1, 10: 8, 20: 10}  # count reached -> the rise that got there
+        await asyncio.gather(
+            monitor(
+                [
+                    LeadingSource(
+                        a,
+                        [live(a, 1), live(a, 2), live(a, 10), live(a, 20)],
+                        all_polled,
+                    )
+                ],
+                ChimeConfig(UP, DOWN),
+                play=lambda path: None,
+                notify=slow,
+            ),
+            release_once_polled(),
+        )
+
+        self.assertNotEqual(posted, [])
+        for title, body in posted:
+            count = int(body.rsplit(" ", 1)[1])
+            self.assertEqual(title, f"+{delta_for[count]} watching twitch chan")
+
     async def test_a_fall_chimes_but_posts_no_notification(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
