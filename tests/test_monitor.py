@@ -379,30 +379,36 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(posted), 1)
         self.assertIn("twitch blind ?", posted[0][1])
 
-    async def test_a_rise_after_a_recovered_outage_names_nobody_who_joined_during_it(
+    async def test_recovery_from_an_outage_re_baselines_rather_than_spanning_it(
         self,
     ) -> None:
-        # While a poll is failing the watcher is blind, so the chat roster it
-        # last saw is a pre-outage sample. Diffing the first recovered read
-        # against it would announce joe_doe, who joined while nobody was
-        # looking, as an arrival on the recovery rise.
+        # While a poll is failing the watcher is blind, so both the count and
+        # the chat roster it last saw are pre-outage samples. Keeping the count
+        # would chime and announce "+490 watching" on the first read back — a
+        # delta measured across an unbounded gap. Keeping the roster would
+        # announce joe_doe, who joined while nobody was looking. The recovery
+        # poll re-baselines silently instead; only the genuine 500 -> 502 rise
+        # after it chimes, and it names nobody from the gap.
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
         played: list[Path] = []
         client = FakeChatters(
-            [frozenset({"lurker"}), frozenset({"lurker", "joe_doe"})]
+            [
+                frozenset({"lurker"}),  # seeds
+                frozenset({"lurker", "joe_doe"}),  # first read back: reseeds
+                frozenset({"lurker", "joe_doe"}),  # the rise: nobody new
+            ]
         )
 
         await monitor(
-            [FakeSource(a, [live(a, 1), None, live(a, 2)])],
+            [FakeSource(a, [live(a, 10), None, live(a, 500), live(a, 502)])],
             ChimeConfig(UP, DOWN),
             play=played.append,
             notify=lambda title, body: posted.append((title, body)),
             namer=TwitchChatterNamer(client, FakeStore()),
         )
 
-        self.assertEqual([title for title, _ in posted], ["+1 watching twitch chan"])
-        # The chime baseline survives the outage, so 1 -> 2 still chimes once.
+        self.assertEqual([title for title, _ in posted], ["+2 watching twitch chan"])
         self.assertEqual(played, [UP])
 
     async def test_a_chatter_who_joined_on_a_flat_poll_is_not_named_on_the_next_rise(
