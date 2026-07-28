@@ -396,101 +396,70 @@ class ChatterClientTests(unittest.TestCase):
         self.assertEqual(responses, [])  # exactly one refresh, one retry
         self.assertEqual(len(store.saved), 1)  # the rotated token was persisted
 
-    def test_a_permanent_401_is_remembered_instead_of_refreshed_every_rise(self) -> None:
+    def _permanently_refuse(self) -> tuple[_RecordingStore, ChatterClient, StoredToken]:
         # A missing moderator:read:chatters scope answers 401 forever. Retrying
         # would POST a refresh per rise, and Twitch rate-limits refreshes and
         # invalidates a redeemed refresh token — eventually destroying the grant.
         store = _RecordingStore()
         client = ChatterClient(TwitchCredentials("id", "secret"), store)
-        first_rise: list[object] = [
+        refused: list[object] = [
             self._http_error(401),  # the read
-            {"access_token": "fresh", "refresh_token": "rotated"},  # the refresh
+            {"access_token": "rotated-placeholder", "refresh_token": "r2"},  # refresh
             self._http_error(401),  # the retry: still refused
         ]
+
+        def fake_get_json(request: object) -> object:
+            item = refused.pop(0)
+            if isinstance(item, HTTPError):
+                raise item
+            return item
+
         with patch(
-            "youtube_live_count_chime.chatters.get_json", side_effect=first_rise
+            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
         ):
             with self.assertLogs("youtube_live_count_chime.chatters", "ERROR") as logs:
                 with self.assertRaises(TwitchAuthError):
                     client.chatters(TOKEN)
         self.assertIn("--auth watchmepivot", "\n".join(logs.output))
+        return store, client, store.saved[-1]
 
-        with patch("youtube_live_count_chime.chatters.get_json") as get_json:
-            with self.assertNoLogs("youtube_live_count_chime.chatters", "ERROR"):
-                with self.assertRaises(TwitchAuthError):
-                    client.chatters(TOKEN)
-
-        # No read, no refresh POST, no token-file rewrite, and told only once.
-        self.assertEqual(get_json.call_count, 0)
-        self.assertEqual(len(store.saved), 1)
-
-    def test_the_rotated_token_the_store_now_holds_is_short_circuited_too(self) -> None:
-        # The half of the memo that actually fires in production: the refusal
-        # already persisted the rotated token, so the *next* poll reads that one
-        # back and presents it. Remembering only the token originally presented
-        # would leave every poll doing read -> 401 -> refresh POST -> 401, the
-        # rate-limited, grant-destroying loop the memo exists to prevent.
-        store = _RecordingStore()
-        client = ChatterClient(TwitchCredentials("id", "secret"), store)
-        refused: list[object] = [
-            self._http_error(401),  # the read
-            {"access_token": "rotated-placeholder", "refresh_token": "r2"},
-            self._http_error(401),  # the retry: permanently refused
-        ]
-
-        def fake_get_json(request: object) -> object:
-            item = refused.pop(0)
-            if isinstance(item, HTTPError):
-                raise item
-            return item
-
-        with patch(
-            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
-        ):
-            with self.assertLogs("youtube_live_count_chime.chatters", "ERROR"):
-                with self.assertRaises(TwitchAuthError):
-                    client.chatters(TOKEN)
-
-        rotated = store.saved[-1]  # exactly what the next poll's store.get() returns
-        with patch("youtube_live_count_chime.chatters.get_json") as get_json:
-            with self.assertRaises(TwitchAuthError):
-                client.chatters(rotated)
-
-        self.assertEqual(get_json.call_count, 0)  # no read and no refresh POST
-        self.assertEqual(len(store.saved), 1)  # and no further token rotation
-
-    def test_a_token_stored_by_a_later_auth_is_tried_rather_than_short_circuited(
+    def test_a_second_401_is_short_circuited_only_for_the_still_refused_token(
         self,
     ) -> None:
-        # Re-running --auth is the documented repair for a permanent 401. If
-        # the memo were keyed by login, the running watcher would keep refusing
-        # to read the roster with the freshly granted token until restarted.
-        client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())
-        refused: list[object] = [
-            self._http_error(401),
-            {"access_token": "rotated-placeholder", "refresh_token": "r"},
-            self._http_error(401),  # permanent: memoized
-        ]
-
-        def fake_get_json(request: object) -> object:
-            item = refused.pop(0)
-            if isinstance(item, HTTPError):
-                raise item
-            return item
-
-        with patch(
-            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
-        ):
-            with self.assertLogs("youtube_live_count_chime.chatters", "ERROR"):
-                with self.assertRaises(TwitchAuthError):
-                    client.chatters(TOKEN)
-
-        granted = StoredToken("watchmepivot", "42", "granted-placeholder", "r2")
-        with patch(
-            "youtube_live_count_chime.chatters.get_json",
-            return_value={"data": [{"user_login": "joe_doe"}]},
-        ):
-            self.assertEqual(client.chatters(granted), frozenset({"joe_doe"}))
+        # The memo is keyed by the presented token, not by login: the same
+        # token and its still-refused rotation must short-circuit (no read,
+        # no refresh POST, no further save, told only once) rather than
+        # rate-limit the grant with a refresh every rise. But a freshly
+        # granted token from a later --auth — the documented repair for a
+        # permanent 401 — must still be retried, or a running watcher would
+        # refuse to read the roster with the new grant until restarted.
+        granted = StoredToken("watchmepivot", "42", "granted-placeholder", "r3")
+        cases = (
+            ("the token originally presented", lambda rotated: TOKEN, True),
+            ("its rotated replacement", lambda rotated: rotated, True),
+            ("a token from a later --auth", lambda rotated: granted, False),
+        )
+        for name, pick_token, short_circuits in cases:
+            with self.subTest(name):
+                store, client, rotated = self._permanently_refuse()
+                token = pick_token(rotated)
+                if short_circuits:
+                    with patch("youtube_live_count_chime.chatters.get_json") as get_json:
+                        with self.assertNoLogs(
+                            "youtube_live_count_chime.chatters", "ERROR"
+                        ):
+                            with self.assertRaises(TwitchAuthError):
+                                client.chatters(token)
+                    self.assertEqual(get_json.call_count, 0)
+                    self.assertEqual(len(store.saved), 1)
+                else:
+                    with patch(
+                        "youtube_live_count_chime.chatters.get_json",
+                        return_value={"data": [{"user_login": "joe_doe"}]},
+                    ):
+                        self.assertEqual(
+                            client.chatters(token), frozenset({"joe_doe"})
+                        )
 
     def test_a_non_401_failure_is_not_retried(self) -> None:
         client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())
