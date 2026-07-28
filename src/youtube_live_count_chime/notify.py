@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from typing import Final
 
+from youtube_live_count_chime.models import POLL_INTERVAL_SECONDS
+
 
 _OSASCRIPT: Final = "/usr/bin/osascript"
 
@@ -36,7 +38,10 @@ def post_notification(title: str, body: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=10.0,
+            # The caller awaits this inside its poll loop, so a wedged
+            # Notification Center costs that one channel a single extra poll
+            # interval — and it still cannot hang the watcher.
+            timeout=POLL_INTERVAL_SECONDS,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # These exceptions render the whole argv, and the argv carries the

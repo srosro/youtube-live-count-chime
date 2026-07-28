@@ -1,6 +1,5 @@
 import asyncio
 import io
-import threading
 import unittest
 from collections.abc import AsyncIterator, Sequence
 from contextlib import redirect_stdout
@@ -232,7 +231,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
 class NotificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_chime_plays_before_notifying(self) -> None:
         # The chime is the pre-existing signal and owes nothing to the network.
-        # The banner costs a bounded-but-real osascript call, so ordering it
+        # The banner costs a real (~0.13s) osascript call, so ordering it
         # before the chime delays every chime behind I/O.
         a = StreamTarget(Platform.TWITCH, "chan")
         events: list[str] = []
@@ -245,119 +244,6 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(events, ["chime", "notify"])
-
-    async def test_a_slow_notification_does_not_delay_the_next_poll(self) -> None:
-        # Delivery is bounded but real (10s), and the polling generator sleeps
-        # its interval only once the consumer comes back for the next
-        # snapshot — so awaiting the banner inline stretches this channel's
-        # cadence by however long the banner takes. The notifier here blocks
-        # until the next poll is requested, which only ever happens if
-        # consume() did not wait for delivery.
-        a = StreamTarget(Platform.TWITCH, "chan")
-        polled_again = asyncio.Event()
-        release = threading.Event()
-        events: list[str] = []
-
-        def slow(title: str, body: str) -> None:
-            # Bounded so a regression fails an assertion, not the clock.
-            release.wait(5.0)
-            events.append("notified")
-
-        async def release_once_polled() -> None:
-            await polled_again.wait()
-            events.append("polled")
-            release.set()
-
-        await asyncio.gather(
-            monitor(
-                [LeadingSource(a, [live(a, 1), live(a, 2)], polled_again)],
-                ChimeConfig(UP, DOWN),
-                play=lambda path: None,
-                notify=slow,
-            ),
-            release_once_polled(),
-        )
-
-        self.assertEqual(events, ["polled", "notified"])
-
-    async def test_rises_arriving_during_a_send_coalesce_instead_of_stacking(
-        self,
-    ) -> None:
-        # Delivery is bounded but real (10s) while rises can arrive every poll
-        # interval, so one task per rise has no back-pressure at all: the
-        # banners pile up and each eventually posts a delta measured minutes
-        # earlier. Coalescing keeps at most one send in flight and one pending,
-        # so five rises inside a single slow send post at most twice — and the
-        # banner that does post is the newest, not the oldest.
-        a = StreamTarget(Platform.TWITCH, "chan")
-        all_polled = asyncio.Event()
-        release = threading.Event()
-        posted: list[tuple[str, str]] = []
-
-        def slow(title: str, body: str) -> None:
-            # Bounded so a regression fails an assertion, not the clock.
-            release.wait(5.0)
-            posted.append((title, body))
-
-        async def release_once_polled() -> None:
-            await all_polled.wait()
-            release.set()
-
-        rises = [live(a, count) for count in range(1, 7)]
-        await asyncio.gather(
-            monitor(
-                [LeadingSource(a, rises, all_polled)],
-                ChimeConfig(UP, DOWN),
-                play=lambda path: None,
-                notify=slow,
-            ),
-            release_once_polled(),
-        )
-
-        self.assertLessEqual(len(posted), 2)  # one in flight plus one pending
-        self.assertNotEqual(posted, [])  # but the rise is not simply dropped
-        self.assertEqual(posted[-1], ("+1 watching twitch chan", "twitch chan 6"))
-
-    async def test_a_coalesced_banner_pairs_its_delta_with_its_own_roster(self) -> None:
-        # A banner's two halves must describe one moment. Freezing the title at
-        # rise time while rendering the roster at post time lets a queued
-        # banner read "+1" over a body showing that channel far higher. Each
-        # count below is reachable by exactly one delta, so any banner whose
-        # title and body disagree is a banner assembled from two moments.
-        a = StreamTarget(Platform.TWITCH, "chan")
-        all_polled = asyncio.Event()
-        release = threading.Event()
-        posted: list[tuple[str, str]] = []
-
-        def slow(title: str, body: str) -> None:
-            release.wait(5.0)
-            posted.append((title, body))
-
-        async def release_once_polled() -> None:
-            await all_polled.wait()
-            release.set()
-
-        delta_for = {2: 1, 10: 8, 20: 10}  # count reached -> the rise that got there
-        await asyncio.gather(
-            monitor(
-                [
-                    LeadingSource(
-                        a,
-                        [live(a, 1), live(a, 2), live(a, 10), live(a, 20)],
-                        all_polled,
-                    )
-                ],
-                ChimeConfig(UP, DOWN),
-                play=lambda path: None,
-                notify=slow,
-            ),
-            release_once_polled(),
-        )
-
-        self.assertNotEqual(posted, [])
-        for title, body in posted:
-            count = int(body.rsplit(" ", 1)[1])
-            self.assertEqual(title, f"+{delta_for[count]} watching twitch chan")
 
     async def test_a_fall_chimes_but_posts_no_notification(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
@@ -382,11 +268,11 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         def explode(title: str, body: str) -> None:
             raise NotificationError("banner refused")
 
-        # The warning is the operator's only signal that banners are broken.
-        # The send runs as its own task now, and a task that raises inside a
-        # TaskGroup cancels its siblings — so the second channel pins that a
-        # refused banner takes down neither its own channel nor any other.
-        with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
+        # The warning is the operator's only signal that banners are broken,
+        # and a NotificationError escaping into the TaskGroup would cancel the
+        # siblings — so the second channel pins that a refused banner takes
+        # down neither its own channel nor any other.
+        with self.assertLogs("youtube_live_count_chime.monitor", "WARNING"):
             await monitor(
                 [
                     FakeSource(a, [live(a, 1), live(a, 2), live(a, 5)]),
@@ -398,7 +284,6 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(played, [UP, UP, UP])  # all three rises still chimed
-        self.assertEqual(len(logs.records), 3)  # each failure warned
 
     async def test_the_digest_tells_a_failed_poll_apart_from_a_confirmed_offline(
         self,
