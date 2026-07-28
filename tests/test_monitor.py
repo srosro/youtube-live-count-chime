@@ -231,13 +231,14 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
 
 class NotificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_each_rise_chimes_then_posts_before_the_next_is_polled(self) -> None:
-        # Two contracts in one interleaving. The chime is the pre-existing
-        # signal and owes nothing to the network, so it precedes the banner's
-        # real (~0.13s) osascript call. And delivery is awaited inline, so a
-        # channel's banners stay ordered and each title/body pair describes
-        # one moment — two rises must not collapse or overlap. Detaching the
-        # send passes a single-rise version of this test, because the
-        # TaskGroup joins the sender before monitor() returns.
+        # The chime is the pre-existing signal and owes nothing to the
+        # network, so it precedes the banner's real (~0.13s) osascript call.
+        # And delivery is awaited inline, so one channel's rises are posted
+        # in order rather than collapsing or overlapping. A single-rise
+        # version of this passes even with the send detached, because the
+        # TaskGroup joins the sender before monitor() returns; two rises and
+        # a notifier that takes time are what separate them. (The exact
+        # title and body are pinned by the digest tests, not here.)
         a = StreamTarget(Platform.TWITCH, "chan")
         events: list[str] = []
 
