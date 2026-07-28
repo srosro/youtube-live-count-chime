@@ -113,14 +113,16 @@ class _FakeCallbackServer:
     stubbed out) so tests exercise the actual callback-vs-stray-request
     filtering, not a reimplementation of it. Every ``timeout`` the flow
     assigns is recorded, so the per-attempt remainder of the overall budget
-    can be asserted.
+    can be asserted. Every reply body is recorded too, in order, so a test can
+    inspect what a request *before* the final callback was actually shown —
+    not only the last one.
     """
 
     def __init__(self, *events: str | None) -> None:
         self._events = list(events)
         self.timeout = 0.0
         self.timeouts: list[float] = []
-        self.last_response: io.BytesIO | None = None
+        self.responses: list[bytes] = []
 
     def __enter__(self) -> "_FakeCallbackServer":
         return self
@@ -136,7 +138,6 @@ class _FakeCallbackServer:
         handler = _CallbackHandler.__new__(_CallbackHandler)
         handler.path = event
         handler.wfile = io.BytesIO()
-        self.last_response = handler.wfile
         with (
             patch.object(_CallbackHandler, "send_response", lambda self, code: None),
             patch.object(
@@ -145,6 +146,7 @@ class _FakeCallbackServer:
             patch.object(_CallbackHandler, "end_headers", lambda self: None),
         ):
             handler.do_GET()
+        self.responses.append(handler.wfile.getvalue())
 
 
 CALLBACK = "/?code=abc123&state=fixed-state"
@@ -208,17 +210,47 @@ class RunAuthFlowTests(unittest.TestCase):
         # the terminal reports a refusal.
         server = _FakeCallbackServer(CALLBACK)
         self._run_flow(server)
-        assert server.last_response is not None
-        succeeded = server.last_response.getvalue()
+        self.assertEqual(len(server.responses), 1)
+        succeeded = server.responses[0]
         self.assertNotIn(b"Authorized", succeeded)
 
         refused_server = _FakeCallbackServer("/?error=access_denied&state=fixed-state")
         with self.assertRaises(AuthError):
             self._run_flow(refused_server)
-        assert refused_server.last_response is not None
-        refused = refused_server.last_response.getvalue()
+        self.assertEqual(len(refused_server.responses), 1)
+        refused = refused_server.responses[0]
         self.assertNotIn(b"Authorized", refused)
         self.assertEqual(refused, succeeded)
+
+    def test_the_stray_reply_differs_from_the_callback_reply(self) -> None:
+        # Both cases above are ``is_callback`` in do_GET, so they only ever
+        # pin the callback branch's body — twice. The reply served to every
+        # stray request (a favicon probe, a foreign-state callback, a
+        # preconnect that did send a request line) is the *other* branch, and
+        # nothing above pins it, or that it differs from the callback's body.
+        # A regression collapsing the two branches onto one string would
+        # still pass every assertion above while making the neutral-reply
+        # invariant this module documents meaningless.
+        server = _FakeCallbackServer(
+            "/favicon.ico",
+            "/?code=abc123&state=attacker-state",
+            CALLBACK,
+        )
+        out = io.StringIO()
+
+        with redirect_stdout(out):
+            token = self._run_flow(server)
+
+        self.assertEqual(token.login, "watchmepivot")
+        self.assertEqual(len(server.responses), 3)
+        no_code_or_error, foreign_state, callback = server.responses
+
+        stray_reply = b"Waiting for the authorization callback..."
+        callback_reply = b"Authorization response received; return to the terminal."
+        self.assertEqual(no_code_or_error, stray_reply)
+        self.assertEqual(foreign_state, stray_reply)
+        self.assertEqual(callback, callback_reply)
+        self.assertNotEqual(stray_reply, callback_reply)
 
     def test_authorizing_as_the_wrong_account_fails_and_stores_nothing(self) -> None:
         # The easy two-account mistake: the browser was signed in as the other
