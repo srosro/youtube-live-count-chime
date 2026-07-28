@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Final
 
 from youtube_live_count_chime.chatters import TwitchChatterNamer
-from youtube_live_count_chime.digest import Roster, render_title
-from youtube_live_count_chime.models import StreamSnapshot, StreamSource
+from youtube_live_count_chime.digest import render_roster, render_title
+from youtube_live_count_chime.models import StreamSnapshot, StreamSource, StreamTarget
 from youtube_live_count_chime.notify import NotificationError, post_notification
 from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
 
@@ -53,7 +53,8 @@ async def monitor(
     whatever rise came next — the correlation the naming rests on.
     """
     chime_lock = asyncio.Lock()
-    roster = Roster(tuple(source.target for source in sources))
+    order = tuple(source.target for source in sources)
+    counts: dict[StreamTarget, int | None] = {}
 
     async def consume(source: StreamSource) -> None:
         previous: StreamSnapshot | None = None
@@ -68,10 +69,10 @@ async def monitor(
                     # or naming someone who joined while we were blind, since
                     # names are consumed only on a rise. Recovery re-baselines
                     # silently, at one lost chime per failed poll.
-                    roster.discard(source.target)
+                    counts.pop(source.target, None)
                     previous = None
                     continue
-                roster.update(source.target, snapshot.viewers)
+                counts[source.target] = snapshot.viewers
                 if snapshot.stream_id is None:
                     previous = None
                     continue
@@ -117,7 +118,7 @@ async def monitor(
                 if rise is not None:
                     title = render_title(snapshot.target, rise, names)
                     try:
-                        await asyncio.to_thread(notify, title, roster.render())
+                        await asyncio.to_thread(notify, title, render_roster(order, counts))
                     except NotificationError as error:
                         _LOGGER.warning(
                             "could not notify for %s: %s", source.target.key, error

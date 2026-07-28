@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
 from typing import Final
 
 from youtube_live_count_chime.models import StreamTarget
@@ -20,33 +19,23 @@ _SEPARATOR: Final = " · "
 _UNPOLLED: Final = "?"
 
 
-@dataclass(slots=True)
-class Roster:
-    """Current viewer counts for every monitored target, in a fixed order.
+def render_roster(
+    order: Sequence[StreamTarget],
+    counts: dict[StreamTarget, int | None],
+) -> str:
+    """Render every target, including unchanged, offline, and unpolled ones.
 
     ``order`` is the source order from ``build_sources`` and never changes at
-    runtime, so the rendered body has the same shape on every notification.
+    runtime, so the rendered body has the same shape on every notification. A
+    target missing from ``counts`` has not been polled yet, which is not the
+    same as one observed offline (``None``).
     """
-
-    order: tuple[StreamTarget, ...]
-    counts: dict[StreamTarget, int | None] = field(default_factory=dict)
-
-    def update(self, target: StreamTarget, viewers: int | None) -> None:
-        """Record a target's latest count (``None`` when offline)."""
-        self.counts[target] = viewers
-
-    def discard(self, target: StreamTarget) -> None:
-        """Forget a target's count after a failed poll: it is now unknown."""
-        self.counts.pop(target, None)
-
-    def render(self) -> str:
-        """Render every target, including unchanged, offline, and unpolled ones."""
-        parts = []
-        for target in self.order:
-            viewers = self.counts.get(target, _UNPOLLED)
-            shown = "offline" if viewers is None else str(viewers)
-            parts.append(f"{target.label} {shown}")
-        return _SEPARATOR.join(parts)
+    parts = []
+    for target in order:
+        viewers = counts.get(target, _UNPOLLED)
+        shown = "offline" if viewers is None else str(viewers)
+        parts.append(f"{target.label} {shown}")
+    return _SEPARATOR.join(parts)
 
 
 def render_title(target: StreamTarget, delta: int, names: Sequence[str]) -> str:

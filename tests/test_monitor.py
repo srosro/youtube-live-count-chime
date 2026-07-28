@@ -210,10 +210,10 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         client = FakeChatters([frozenset(), frozenset({"joe_doe"})])
 
         # The other source (b) is present to exercise the multi-source shape
-        # of Roster construction, but its own rendered count depends on
-        # cross-task scheduling order, which monitor() does not guarantee —
-        # that full-roster rendering (fixed order, unchanged/offline entries)
-        # is exhaustively covered directly against Roster in test_digest.py.
+        # of the digest, but its own rendered count depends on cross-task
+        # scheduling order, which monitor() does not guarantee — that
+        # full-roster rendering (fixed order, unchanged/offline entries) is
+        # exhaustively covered directly against render_roster in test_digest.py.
         # Only the rising channel's own count is deterministic here: its
         # roster entry is always written before it notifies.
         await monitor(
