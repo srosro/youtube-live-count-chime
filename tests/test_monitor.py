@@ -10,6 +10,7 @@ from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarg
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
 from youtube_live_count_chime.notify import NotificationError
 from youtube_live_count_chime.sounds import SoundPlaybackError
+from youtube_live_count_chime.speech import SpeechError
 
 
 UP = Path("/System/Library/Sounds/Glass.aiff")
@@ -100,6 +101,15 @@ def silent(title: str, body: str) -> None:
     """
 
 
+def mute(text: str) -> None:
+    """Swallow announcements in tests that assert only on chime behavior.
+
+    Same hazard as `silent`: monitor() defaults to the real `say`, so a rise
+    in a test that does not inject one talks out loud on macOS and warns
+    everywhere else.
+    """
+
+
 class MonitorTests(unittest.IsolatedAsyncioTestCase):
     async def test_chimes_up_and_down_but_not_on_baseline_or_no_change(self) -> None:
         target = StreamTarget(Platform.YOUTUBE, "a")
@@ -109,6 +119,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             [FakeSource(target, snaps)],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            speak=mute,
             notify=silent,
         )
         self.assertEqual(played, [UP, DOWN])  # 5->5 silent, 5->9 up, 9->2 down
@@ -124,6 +135,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             ],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            speak=mute,
             notify=silent,
         )
         self.assertEqual(played, [UP])  # a 1->2 up; b unchanged; baselines silent
@@ -136,6 +148,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 [FakeSource(a, [live(a, 5), live(a, 9)])],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
+                speak=mute,
                 notify=silent,
             )
         # Pins previous->current order and the up/down word (a swap would show
@@ -160,6 +173,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             ],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            speak=mute,
             notify=silent,
         )
         # Every reset step is silent, and chiming resumes on the next real delta.
@@ -179,6 +193,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 [FakeSource(a, [live(a, 1), live(a, 2), live(a, 3)])],
                 ChimeConfig(UP, DOWN),
                 play=boom,
+                speak=mute,
                 notify=silent,
             )
         self.assertEqual(len(logs.records), 2)
@@ -193,6 +208,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
+                speak=mute,
                 notify=silent,
             )
         # Pin the full wrapper message and the preserved cause: this fails if
@@ -226,6 +242,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 ChimeConfig(UP, DOWN),
                 play=played.append,
+                speak=mute,
                 notify=silent,
             )
         # Pin *which* rise chimed, not just how many: swallowing the genuine
@@ -236,22 +253,29 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NotificationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_each_rise_chimes_then_posts_before_the_next_is_polled(self) -> None:
+    async def test_each_rise_chimes_then_speaks_then_posts_before_the_next_poll(
+        self,
+    ) -> None:
         # The chime is the pre-existing signal and owes nothing to the
-        # network, so it precedes the banner's real (~0.13s) osascript call.
-        # And delivery is awaited inline, so one channel's rises are posted
-        # in order rather than collapsing or overlapping. A single-rise
-        # version of this passes even with the send detached, because the
-        # TaskGroup joins the sender before monitor() returns; two rises and
-        # a notifier that takes time are what separate them. (The exact
+        # network, so it precedes both the announcement and the banner's real
+        # (~0.13s) osascript call; the announcement precedes the banner
+        # because it is the signal that survives OBS suppressing banners.
+        # And each is awaited inline, so one channel's rises are announced and
+        # posted in order rather than collapsing or overlapping. A single-rise
+        # version of this passes even with the work detached, because the
+        # TaskGroup joins it before monitor() returns; two rises and steps
+        # that take time are what separate the two designs. (The exact
         # title and body are pinned by the digest tests, not here.)
         a = StreamTarget(Platform.TWITCH, "chan")
         events: list[str] = []
 
+        def slow_speak(text: str) -> None:
+            # Real speech takes ~3.6s.
+            time.sleep(0.05)
+            events.append("speak")
+
         def slow_notify(title: str, body: str) -> None:
-            # Real osascript takes ~0.13s. A send that is merely scheduled
-            # rather than awaited finishes after the next poll's chime, so
-            # the interleaving below is what distinguishes the two designs.
+            # Real osascript takes ~0.13s.
             time.sleep(0.05)
             events.append("notify")
 
@@ -259,25 +283,77 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             [FakeSource(a, [live(a, 1), live(a, 2), live(a, 3)])],
             ChimeConfig(UP, DOWN),
             play=lambda path: events.append("chime"),
+            speak=slow_speak,
             notify=slow_notify,
         )
 
-        self.assertEqual(events, ["chime", "notify", "chime", "notify"])
+        self.assertEqual(
+            events, ["chime", "speak", "notify", "chime", "speak", "notify"]
+        )
 
-    async def test_a_fall_chimes_but_posts_no_notification(self) -> None:
+    async def test_the_spoken_line_is_the_banner_title(self) -> None:
+        # The DRY contract: one wording reaches both consumers, so a streamer
+        # hears exactly what the banner would have said. Two format strings
+        # would drift the moment either is reworded.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        spoken: list[str] = []
+        posted: list[tuple[str, str]] = []
+
+        await monitor(
+            [FakeSource(a, [live(a, 1), live(a, 3)])],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            speak=spoken.append,
+            notify=lambda title, body: posted.append((title, body)),
+        )
+
+        self.assertEqual(spoken, ["2 new viewers on twitch chan"])
+        self.assertEqual([title for title, _ in posted], spoken)
+
+    async def test_a_fall_chimes_but_neither_speaks_nor_posts(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
+        spoken: list[str] = []
         played: list[Path] = []
 
         await monitor(
             [FakeSource(a, [live(a, 5), live(a, 2)])],
             ChimeConfig(UP, DOWN),
             play=played.append,
+            speak=spoken.append,
             notify=lambda title, body: posted.append((title, body)),
         )
 
         self.assertEqual(posted, [])
+        self.assertEqual(spoken, [])  # a departure is not worth narrating
         self.assertEqual(played, [DOWN])  # the fall is still audible
+
+    async def test_a_speech_failure_warns_and_still_posts_the_notification(self) -> None:
+        a = StreamTarget(Platform.TWITCH, "chan")
+        posted: list[tuple[str, str]] = []
+        played: list[Path] = []
+
+        def explode(text: str) -> None:
+            raise SpeechError("no voice installed")
+
+        # A SpeechError escaping into the TaskGroup would cancel every
+        # channel, and swallowing it silently would leave the operator with no
+        # signal — so it is warned, and the banner it precedes still posts.
+        with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
+            await monitor(
+                [FakeSource(a, [live(a, 1), live(a, 2), live(a, 5)])],
+                ChimeConfig(UP, DOWN),
+                play=played.append,
+                speak=explode,
+                notify=lambda title, body: posted.append((title, body)),
+            )
+
+        self.assertEqual(len(logs.records), 2)  # kept watching past the first
+        self.assertEqual(played, [UP, UP])
+        self.assertEqual(
+            [title for title, _ in posted],
+            ["1 new viewer on twitch chan", "3 new viewers on twitch chan"],
+        )
 
     async def test_a_notification_failure_does_not_stop_the_watcher(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
@@ -299,6 +375,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 ChimeConfig(UP, DOWN),
                 play=played.append,
+                speak=mute,
                 notify=explode,
             )
 
@@ -347,6 +424,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
                 ],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
+                speak=mute,
                 notify=lambda title, body: posted.append((title, body)),
             ),
             release_the_rise(),
@@ -354,7 +432,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(posted), 1)
         title, body = posted[0]
-        self.assertEqual(title, "+1 watching youtube rising")
+        self.assertEqual(title, "1 new viewer on youtube rising")
         self.assertEqual(
             body,
             "youtube rising 2 · youtube steady 4 · twitch blind ? · twitch ended offline",

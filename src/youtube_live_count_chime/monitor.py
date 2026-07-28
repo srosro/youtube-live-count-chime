@@ -9,10 +9,11 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from youtube_live_count_chime.digest import render_roster
+from youtube_live_count_chime.digest import describe_rise, render_roster
 from youtube_live_count_chime.models import StreamSnapshot, StreamSource, StreamTarget
 from youtube_live_count_chime.notify import NotificationError, post_notification
 from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
+from youtube_live_count_chime.speech import SpeechError, speak_text
 
 
 _LOGGER: Final = logging.getLogger(__name__)
@@ -31,20 +32,25 @@ async def monitor(
     config: ChimeConfig,
     *,
     play: Callable[[Path], None] = play_sound,
+    speak: Callable[[str], None] = speak_text,
     notify: Callable[[str, str], None] = post_notification,
 ) -> None:
     """Watch every source concurrently, chiming and notifying on count changes.
 
-    A rise also posts a macOS notification. The roster of current counts is
+    A rise is also spoken aloud and posts a macOS notification. Speech is the
+    signal that survives streaming: OBS suppresses banners while capturing, so
+    the announcement is what the streamer actually gets. It is worded once, by
+    ``describe_rise``, and used verbatim as both the spoken line and the
+    banner title. The roster of current counts is
     shared across consumers, so every notification carries the same
     fixed-shape digest of every watched channel. The chime fires first,
     unconditionally, and awaited; the banner is then posted inline, so its
     title and body describe one moment and this channel's banners stay in
     order. Delivery costs ~0.13s against a 5s poll interval and only this
-    channel's task waits on it. Playback and notification failures are each
-    warned and skipped so one channel's glitch never stops the watcher: a
-    failed notification still leaves the chime played, and neither costs the
-    other channels. Any other exception escaping a source is an unexpected
+    channel's task waits on it. Playback, speech, and notification failures
+    are each warned and skipped so one channel's glitch never stops the
+    watcher: a failed announcement still leaves the chime played and the
+    banner posted, and none of them costs the other channels. Any other exception escaping a source is an unexpected
     bug: the TaskGroup cancels the siblings and ``main`` reports it (named
     with the channel) and exits non-zero.
     """
@@ -96,6 +102,15 @@ async def monitor(
                     # nothing to the network. The banner costs an osascript
                     # call, so posting it first would delay every chime
                     # behind I/O.
+                    #
+                    # Speech is audio too, so it shares the chime's lock:
+                    # two channels rising at once must never talk over each
+                    # other or over a chime. Known and accepted cost — a
+                    # chime plus a spoken line holds the lock ~4.6s, so a
+                    # rise delays that channel's next poll by roughly one
+                    # extra interval. That is the chosen shape: a bare chime
+                    # is inaudible as information while streaming.
+                    announcement = describe_rise(source.target, delta)
                     async with chime_lock:
                         try:
                             await asyncio.to_thread(play, sound)
@@ -103,11 +118,18 @@ async def monitor(
                             _LOGGER.warning(
                                 "could not play chime for %s: %s", source.target.key, error
                             )
+                        if rising:
+                            try:
+                                await asyncio.to_thread(speak, announcement)
+                            except SpeechError as error:
+                                _LOGGER.warning(
+                                    "could not speak for %s: %s", source.target.key, error
+                                )
                     if rising:
                         try:
                             await asyncio.to_thread(
                                 notify,
-                                f"+{delta} watching {source.target.label}",
+                                announcement,
                                 render_roster(order, counts),
                             )
                         except NotificationError as error:
