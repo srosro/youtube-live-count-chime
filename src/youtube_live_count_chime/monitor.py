@@ -47,11 +47,9 @@ async def monitor(
     unconditionally, and awaited; the banner is then posted inline, so this
     channel's banners stay in order. Title and body are *not* one instant: the
     delta is measured before the audio, and ``render_roster`` reads the shared
-    counts ~5.5s later (longer under lock contention), so another channel's
-    count in the body can be newer than the title's rise — and the rising
-    channel's own body count is its latest, which is what the digest is for.
-    Delivery costs ~0.13s against a 5s poll interval and only this
-    channel's task waits on it. Playback, speech, and notification failures
+    counts after it, so another channel's count in the body can be newer than
+    the title's rise — and the rising channel's own body count is its latest,
+    which is what the digest is for. Playback, speech, and notification failures
     are each warned and skipped so one channel's glitch never stops the
     watcher: a failed announcement still leaves the chime played and the
     banner posted. They are not free to the other channels, though — the
@@ -122,12 +120,11 @@ async def monitor(
                     # both are taken under a *single* acquisition: two
                     # channels rising at once must never talk over each other
                     # or over a chime, and a chime must never be separated
-                    # from the announcement it introduces. Measured cost,
-                    # accepted: Glass is ~1.9s and a spoken line ~3.6s, so a
-                    # rise holds the lock ~5.5s — and because the lock is
-                    # shared by every source, that is ~5.5s in which *any*
-                    # channel with a change waits, not just this one. Only a
-                    # rise pays it — an unchanged poll costs nothing, and a
+                    # from the announcement it introduces. The cost is
+                    # accepted and fleet-wide: the lock is shared by every
+                    # source, so a rise serializes *any* channel with a
+                    # change, not just this one. Only a rise pays it — an
+                    # unchanged poll costs nothing, and a
                     # fall pays only the chime it already paid. That is the
                     # chosen shape: a bare chime carries no information while
                     # streaming.

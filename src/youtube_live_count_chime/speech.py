@@ -8,14 +8,10 @@ from typing import Final
 
 _SAY: Final = "/usr/bin/say"
 
-# A real announcement measures ~3.6s, so the bound has to clear that
-# comfortably or every rise would be cut off mid-sentence instead of spoken;
-# 6s leaves room for a long handle. It is deliberately tighter than a naive
-# "twice the poll interval" (10s): this call is awaited while holding the
-# audio lock that *every* source shares, so a wedged `say` mutes and stalls
-# the whole fleet — not one channel — for the full timeout. That cost is
-# fleet-wide, so it is bought in seconds over the measured line, not in
-# multiples of the loop's cadence.
+# Comfortably longer than a spoken line, so no rise is cut off mid-sentence,
+# and no longer than that: this call is awaited while holding the audio lock
+# that *every* source shares, so a wedged `say` mutes and stalls the whole
+# fleet — not one channel — for the full timeout.
 _TIMEOUT_SECONDS: Final = 6.0
 
 
