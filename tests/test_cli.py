@@ -143,22 +143,39 @@ class MainTests(_CliTestCase):
         ):
             self.assertEqual(main(self.argv("--check", "-y", "@mkbhd")), 0)
 
-    def test_check_wins_over_auth_so_validation_is_never_interactive(self) -> None:
+    def test_check_with_auth_is_rejected_rather_than_half_honoured(self) -> None:
         # The launchd installer validates with `--check "$@"`, so a --auth in
-        # those arguments must not open a browser and bind a port instead of
-        # validating.
+        # those arguments must not open a browser and bind a port. Silently
+        # dropping the --auth would be worse than failing: the user would see
+        # `OK` with no token stored, and discover it later as arrivals that are
+        # never named. Fail loudly, naming both flags.
         def fail_if_called(
             login: str, credentials: object, store: object, **kwargs: object
         ) -> StoredToken:
-            raise AssertionError("--check must not run the auth flow")
+            raise AssertionError("--check --auth must not run the auth flow")
 
+        stderr = StringIO()
         with (
             patch.dict(os.environ, {}, clear=True),
             patch("youtube_live_count_chime.cli.run_auth_flow", fail_if_called),
+            redirect_stderr(stderr),
         ):
             exit_code = main(self.argv("--check", "--auth", "watchmepivot", "-y", "@mkbhd"))
 
-        self.assertEqual(exit_code, 0)
+        self.assertEqual(exit_code, 2)
+        self.assertIn("--check", stderr.getvalue())
+        self.assertIn("--auth", stderr.getvalue())
+
+    def test_check_with_auth_is_rejected_before_channel_validation(self) -> None:
+        # Without channel flags the old shape exited 2 complaining about
+        # missing handles, naming the wrong problem entirely.
+        stderr = StringIO()
+        with patch.dict(os.environ, {}, clear=True), redirect_stderr(stderr):
+            exit_code = main(self.argv("--check", "--auth", "watchmepivot"))
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("--auth", stderr.getvalue())
+        self.assertNotIn("at least one", stderr.getvalue())
 
     def test_check_fails_on_missing_twitch_creds(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

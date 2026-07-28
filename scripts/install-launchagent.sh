@@ -31,8 +31,8 @@ while [ "$#" -gt 0 ]; do
             echo "$1 makes the watcher exit without watching — omit it" >&2; exit 2 ;;
         # --auth is the same class: it exits after authorizing one account, so
         # baked into the agent it would respawn-loop under KeepAlive too. (It
-        # is also interactive, but --check short-circuits it, so the validation
-        # run below would validate rather than open a browser regardless.)
+        # is also interactive, but the watcher rejects `--check --auth`, so the
+        # validation run below errors rather than opening a browser regardless.)
         # --auth is the only --a* watcher flag.
         --auth | --a*)
             echo "$1 authorizes one account and exits — it must not go in the agent." >&2

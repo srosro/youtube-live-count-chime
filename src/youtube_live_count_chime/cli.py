@@ -161,11 +161,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     config = parse_config(argv)
 
-    # --check is the installer's validation run and must never be interactive,
-    # whatever else it is passed: it takes precedence over --auth so that
-    # `--check --auth LOGIN` validates the configuration rather than opening a
-    # browser and binding a port.
-    if config.auth is not None and not config.check:
+    if config.check and config.auth is not None:
+        print(
+            "Error: --check and --auth cannot be combined; --check validates a "
+            "configuration without acting, --auth opens a browser to authorize "
+            "one account. Run them separately.",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
+
+    if config.auth is not None:
         try:
             token = run_auth_flow(config.auth, TwitchCredentials.from_env(), TokenStore())
         except (AuthError, TwitchAuthError, ValueError) as error:
