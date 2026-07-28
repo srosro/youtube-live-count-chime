@@ -2,6 +2,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
+from youtube_live_count_chime.models import POLL_INTERVAL_SECONDS
 from youtube_live_count_chime.notify import NotificationError, post_notification
 
 
@@ -18,10 +19,14 @@ class PostNotificationTests(unittest.TestCase):
         # without them a wedged Notification Center blocks the calling thread
         # forever and a non-zero exit becomes a silent no-op, both with the
         # rest of this suite still green.
-        # Bounded, not a specific bound: the value is a tuning knob, but
-        # `timeout=None` (or no timeout at all) is the regression.
+        # Bounded by the constraint rather than by its current tuning: the
+        # notifier is awaited inside the consumer's poll loop, so the timeout
+        # is exactly how long a wedged banner can stall that channel — it must
+        # cost at most a poll or two, and must not be so short that every real
+        # banner times out instead of showing.
         timeout = run.call_args.kwargs["timeout"]
-        self.assertTrue(0 < timeout <= 60, timeout)
+        self.assertLessEqual(timeout, 2 * POLL_INTERVAL_SECONDS)
+        self.assertGreater(timeout, POLL_INTERVAL_SECONDS / 5)
         self.assertIs(run.call_args.kwargs["check"], True)
 
         # Notification text is not ours to trust. It must reach AppleScript as

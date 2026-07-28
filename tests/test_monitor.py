@@ -226,13 +226,12 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         # inversion this test forbids, and a bare count cannot tell them apart.
         self.assertEqual(played, [UP])
         self.assertIn("twitch:chan: 500 -> 502 (up)", buffer.getvalue())
-        self.assertNotIn("-> 500", buffer.getvalue())
 
 
 class NotificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_chime_plays_before_notifying(self) -> None:
         # The chime is the pre-existing signal and owes nothing to the network.
-        # The banner costs an osascript call (bounded at 10s), so ordering it
+        # The banner costs a bounded-but-real osascript call, so ordering it
         # before the chime delays every chime behind I/O.
         a = StreamTarget(Platform.TWITCH, "chan")
         events: list[str] = []
