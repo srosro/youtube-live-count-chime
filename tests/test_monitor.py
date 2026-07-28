@@ -297,14 +297,9 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(posted, spoken)
 
     async def test_two_channels_rising_at_once_never_talk_over_each_other(self) -> None:
-        # The point of speaking *inside* chime_lock: a channel's chime and the
-        # announcement it introduces are one uninterruptible unit of audio, so
-        # a second channel rising at the same moment queues behind the whole
-        # pair rather than chiming into the middle of someone's sentence.
-        # Hoisting `speak` out of the lock (or taking the lock twice) reorders
-        # this to chime, chime, speak, speak — which is the failure this pins.
-        # Speech is slow, so the window for the other channel to cut in is
-        # real; only the lock closes it.
+        # Pins speech *inside* chime_lock: hoisting it out, or taking the lock
+        # twice, reorders this to chime, chime, speak, speak — one channel
+        # chiming into the middle of another's sentence.
         a = StreamTarget(Platform.TWITCH, "a")
         b = StreamTarget(Platform.YOUTUBE, "b")
         events: list[str] = []

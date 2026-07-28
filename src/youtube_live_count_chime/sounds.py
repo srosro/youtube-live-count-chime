@@ -7,17 +7,10 @@ import subprocess
 from typing import Final
 
 
-# This call is awaited while holding the audio lock every source shares, so a
-# wedged afplay (output device removed, audio rerouted mid-play) would
-# otherwise hold that lock forever — silencing every channel's chime and
-# announcement, and stalling the banners behind them, with nothing logged.
-#
-# The bound catches that hang; it is deliberately NOT tuned to the default
-# chime's ~1.9s. --up-sound/--down-sound take any file the operator points at,
-# so a bound sized for Glass would SIGKILL a longer custom chime mid-play on
-# every change and log a warning each time — breaking a supported setup to
-# guard a pathological one. Generous enough that no plausible alert sound
-# reaches it, short enough that a true wedge ends.
+# Bounds a wedged afplay, which would otherwise hold the shared audio lock
+# forever. Deliberately NOT tuned to the default chime's ~1.9s: --up-sound
+# takes any file the operator points at, and a bound sized for Glass would
+# truncate a working custom chime on every change.
 _TIMEOUT_SECONDS: Final = 30.0
 
 

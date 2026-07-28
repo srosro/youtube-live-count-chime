@@ -18,19 +18,14 @@ class SpeakTextTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command, ("/usr/bin/say", "--", hostile))
         self.assertNotIn("shell", run.call_args.kwargs)
-        # Both halves of the bound matter, and only one of them is loud.
-        # Unbounded, a wedged `say` mutes the whole fleet forever. Too tight,
-        # every announcement is SIGKILLed mid-sentence — and that failure is
-        # silent, since a truncated line still leaves the chime played and the
-        # banner posted. A floor, like the sibling bound on the same lock.
+        # Pins a floor on the bound: too tight and every announcement is
+        # SIGKILLed mid-sentence, silently — chime and banner still land.
         self.assertGreater(run.call_args.kwargs["timeout"], POLL_INTERVAL_SECONDS)
         self.assertIs(run.call_args.kwargs["check"], True)
 
     def test_failure_becomes_speech_error_without_the_spoken_text(self) -> None:
-        # TimeoutExpired is the observable half of the bounded-wait contract: a
-        # wedged say ends as a SpeechError the caller can warn on, never a
-        # blocked caller holding the audio lock forever. The failure is warned
-        # into the LaunchAgent's log file, so it must not carry the argv.
+        # Every failure ends as a SpeechError the caller can warn on, and that
+        # warning reaches a log file, so it must not carry the argv.
         argv = ["/usr/bin/say", "--", "2 new viewers on twitch chan"]
         failures: tuple[Exception, ...] = (
             subprocess.CalledProcessError(1, argv, stderr="boom"),

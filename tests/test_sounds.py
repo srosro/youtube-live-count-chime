@@ -24,17 +24,13 @@ class PlaySoundTests(unittest.TestCase):
             stderr=-1,
             text=True,
         )
-        # The bound is what stops a wedged afplay holding the fleet-wide audio
-        # lock forever. It must clear any plausible custom --up-sound, not just
-        # the ~1.9s default, since truncating a working chime on every change
-        # would be a worse bug than the wedge it guards.
+        # Pins a floor on the bound: too tight and a custom --up-sound longer
+        # than the ~1.9s default is truncated on every change.
         self.assertGreaterEqual(_TIMEOUT_SECONDS, 4 * POLL_INTERVAL_SECONDS)
 
     def test_playback_failure_becomes_sound_playback_error(self) -> None:
-        # Every arm of the catch: a non-zero afplay exit, afplay being
-        # missing/not executable (OSError), and a wedged afplay hitting the
-        # bound — the last is the one that would otherwise hold the shared
-        # audio lock forever with nothing logged.
+        # Every arm of the catch: a non-zero afplay exit, a missing or
+        # non-executable afplay (OSError), and the bound firing.
         failures: tuple[Exception, ...] = (
             subprocess.CalledProcessError(1, "afplay", stderr="boom"),
             FileNotFoundError("afplay not found"),

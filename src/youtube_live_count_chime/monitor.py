@@ -37,29 +37,19 @@ async def monitor(
 ) -> None:
     """Watch every source concurrently, chiming and notifying on count changes.
 
-    A rise is also spoken aloud and posts a macOS notification. Speech is the
-    signal that survives streaming: OBS suppresses banners while capturing, so
-    the announcement is what the streamer actually gets. It is worded once, by
-    ``describe_rise``, and used verbatim as both the spoken line and the
-    banner title. The roster of current counts is
-    shared across consumers, so every notification carries the same
-    fixed-shape digest of every watched channel. The chime fires first,
-    unconditionally, and awaited; the banner is then posted inline, so this
-    channel's banners stay in order. Title and body are *not* one instant: the
-    delta is measured before the audio, and ``render_roster`` reads the shared
-    counts after it, so another channel's count in the body can be newer than
-    the title's rise — and the rising channel's own body count is its latest,
-    which is what the digest is for. Playback, speech, and notification failures
-    are each warned and skipped so one channel's glitch never stops the
-    watcher: a failed announcement still leaves the chime played and the
-    banner posted. They are not free to the other channels, though — the
-    chime and the announcement are awaited under the audio lock every source
-    shares, so a wedged one blocks every channel's audio until its bound
-    expires. Worst case both wedge in the same acquisition: ``sounds`` and
-    ``speech`` bound them separately, and their sum is how long the fleet can
-    go silent. That is deliberately far longer than a poll — the chime's bound
-    has to clear any ``--up-sound`` the operator points at, not just the
-    default — so it buys a recoverable stall instead of a permanent one. Any other exception escaping a source is an unexpected bug: the
+    A rise is also spoken aloud and posts a macOS notification, worded once by
+    ``describe_rise`` and used verbatim as both the spoken line and the banner
+    title. The roster of current counts is shared across consumers, so every
+    notification carries the same fixed-shape digest of every watched channel.
+    Title and body are *not* one instant: the delta is measured before the
+    audio, and ``render_roster`` reads the shared counts after it, so another
+    channel's count in the body can be newer than the title's rise — and the
+    rising channel's own body count is its latest, which is what the digest is
+    for. Playback, speech, and notification failures are each warned and
+    skipped so one channel's glitch never stops the watcher. Worst case the
+    chime and the announcement both wedge in one acquisition: their separate
+    bounds in ``sounds`` and ``speech`` sum to how long the fleet can go
+    silent. Any other exception escaping a source is an unexpected bug: the
     TaskGroup cancels the siblings and ``main`` reports it (named with the
     channel) and exits non-zero.
     """
@@ -116,22 +106,12 @@ async def monitor(
                         flush=True,
                     )
                     # Chime first: it is the pre-existing signal and owes
-                    # nothing to the network. The banner costs an osascript
-                    # call, so posting it first would delay every chime
-                    # behind I/O.
-                    #
-                    # Speech is audio too, so it shares the chime's lock, and
-                    # both are taken under a *single* acquisition: two
-                    # channels rising at once must never talk over each other
-                    # or over a chime, and a chime must never be separated
-                    # from the announcement it introduces. The cost is
-                    # accepted and fleet-wide: the lock is shared by every
-                    # source, so a rise serializes *any* channel with a
-                    # change, not just this one. Only a rise pays it — an
-                    # unchanged poll costs nothing, and a
-                    # fall pays only the chime it already paid. That is the
-                    # chosen shape: a bare chime carries no information while
-                    # streaming.
+                    # nothing to the network. Speech is audio too and is taken
+                    # under the *same* single acquisition — channels rising at
+                    # once must not talk over each other, and a chime must not
+                    # be split from the announcement it introduces. The lock is
+                    # shared by every source, so that serializes any other
+                    # channel's change too; only a rise pays it.
                     if rising:
                         announcement = describe_rise(source.target, delta)
                         async with chime_lock:

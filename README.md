@@ -121,13 +121,10 @@ title. The announcement is the signal that survives streaming: OBS suppresses
 notification banners while it captures the screen, so while you are live the
 banner never displays, but audio is not suppressed.
 
-The order on a rise is chime, then announcement, then banner. The chime and the
-announcement are taken under a single acquisition of the audio lock every
-watched channel shares, so two channels rising at once never talk over each
-other. The cost is fleet-wide, not per-channel: for as long as one rise is
-being chimed and announced, any *other* channel whose count changes waits too.
-Only a rise pays it: an unchanged poll costs nothing at all, and a fall pays
-only the chime it has always paid.
+The order on a rise is chime, then announcement, then banner. A rise briefly
+serializes audio across every watched channel, so two channels rising at once
+never talk over each other. Only a rise pays that: an unchanged poll costs
+nothing at all, and a fall pays only the chime it has always paid.
 
 The notification body is a digest of every channel being watched, always in the
 same order:

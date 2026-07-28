@@ -8,10 +8,8 @@ from typing import Final
 
 _SAY: Final = "/usr/bin/say"
 
-# Comfortably longer than a spoken line, so no rise is cut off mid-sentence,
-# and no longer than that: this call is awaited while holding the audio lock
-# that *every* source shares, so a wedged `say` mutes and stalls the whole
-# fleet — not one channel — for the full timeout.
+# Bounds a wedged `say`, which holds the shared audio lock for the full
+# timeout; comfortably longer than a spoken line so no rise is cut off.
 _TIMEOUT_SECONDS: Final = 6.0
 
 
