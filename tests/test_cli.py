@@ -90,14 +90,14 @@ class BuildSourcesTests(_CliTestCase):
             sources = build_sources(parse_config(self.argv("-y", "@mkbhd", "-y", "ltt")))
 
         self.assertEqual(
-            [source.name for source in sources], ["youtube:mkbhd", "youtube:ltt"]
+            [source.target.key for source in sources], ["youtube:mkbhd", "youtube:ltt"]
         )
 
     def test_deduplicates_handles_across_prefix_and_case(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             sources = build_sources(parse_config(self.argv("-y", "@MKBHD", "-y", "mkbhd")))
 
-        self.assertEqual([source.name for source in sources], ["youtube:mkbhd"])
+        self.assertEqual([source.target.key for source in sources], ["youtube:mkbhd"])
 
     def test_twitch_without_creds_raises_named_error(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -110,7 +110,7 @@ class BuildSourcesTests(_CliTestCase):
             sources = build_sources(parse_config(self.argv("-y", "@mkbhd", "-t", "Shroud")))
 
         self.assertEqual(
-            [source.name for source in sources], ["youtube:mkbhd", "twitch:shroud"]
+            [source.target.key for source in sources], ["youtube:mkbhd", "twitch:shroud"]
         )
 
     def test_twitch_logins_share_one_client(self) -> None:
@@ -172,7 +172,7 @@ class MainTests(_CliTestCase):
         async def fake_monitor(
             sources: Sequence[StreamSource], config: ChimeConfig
         ) -> None:
-            captured["names"] = [source.name for source in sources]
+            captured["names"] = [source.target.key for source in sources]
             captured["config"] = config
 
         with patch("youtube_live_count_chime.cli.monitor", fake_monitor):

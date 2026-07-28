@@ -45,6 +45,13 @@ async def monitor(
         previous: StreamSnapshot | None = None
         try:
             async for snapshot in source.snapshots():
+                if snapshot is None:
+                    # A failed poll: unknown, not offline. The chime baseline is
+                    # a pre-outage sample, so clear it — that is what keeps the
+                    # first poll back from chiming a gap-wide delta. Recovery
+                    # re-baselines silently, at one lost chime per failed poll.
+                    previous = None
+                    continue
                 if snapshot.stream_id is None:
                     previous = None
                     continue
@@ -59,7 +66,7 @@ async def monitor(
                     direction = "up" if rising else "down"
                     sound = config.up_sound if rising else config.down_sound
                     print(
-                        f"{source.name}: {previous.viewers} -> {snapshot.viewers} "
+                        f"{source.target.key}: {previous.viewers} -> {snapshot.viewers} "
                         f"({direction})",
                         flush=True,
                     )
@@ -68,12 +75,12 @@ async def monitor(
                             await asyncio.to_thread(play, sound)
                         except SoundPlaybackError as error:
                             _LOGGER.warning(
-                                "could not play chime for %s: %s", source.name, error
+                                "could not play chime for %s: %s", source.target.key, error
                             )
                 previous = snapshot
         except Exception as error:
             # Name the channel in the failure that main will report.
-            raise RuntimeError(f"source {source.name} failed") from error
+            raise RuntimeError(f"source {source.target.key} failed") from error
 
     async with asyncio.TaskGroup() as group:
         for source in sources:

@@ -114,7 +114,6 @@ def fetch_live_page(url: str) -> YouTubeLivePage:
 class YouTubeSource:
     """An asynchronous polling source for one YouTube channel handle."""
 
-    name: str
     target: StreamTarget
     url: str
 
@@ -124,7 +123,6 @@ class YouTubeSource:
         normalized_handle = normalize_handle(handle)
         target = StreamTarget(Platform.YOUTUBE, normalized_handle)
         return cls(
-            name=target.key,
             target=target,
             url=f"https://www.youtube.com/@{normalized_handle}/live",
         )
@@ -138,6 +136,6 @@ class YouTubeSource:
             viewers=page.viewers,
         )
 
-    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         """Yield live snapshots, retrying page-fetch failures after each poll."""
-        return poll_snapshots(self.name, self._snapshot)
+        return poll_snapshots(self.target.key, self._snapshot)

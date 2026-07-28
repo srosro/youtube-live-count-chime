@@ -1,6 +1,6 @@
 import io
 import unittest
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -14,19 +14,23 @@ DOWN = Path("/System/Library/Sounds/Basso.aiff")
 
 
 class FakeSource:
-    def __init__(self, name: str, snaps: list[StreamSnapshot]) -> None:
-        self.name = name
+    """Replay scripted polls; a ``None`` entry is a poll whose fetch failed."""
+
+    def __init__(
+        self, target: StreamTarget, snaps: Sequence[StreamSnapshot | None]
+    ) -> None:
+        self.target = target
         self._snaps = snaps
 
-    async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         for snap in self._snaps:
             yield snap
 
 
 class ExplodingSource:
-    name = "channel-x"
+    target = StreamTarget(Platform.TWITCH, "channel-x")
 
-    async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         raise RuntimeError("upstream failure")
         yield  # pragma: no cover - marks this an async generator
 
@@ -41,7 +45,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         snaps = [live(target, 5), live(target, 5), live(target, 9), live(target, 2)]
         played: list[Path] = []
         await monitor(
-            [FakeSource("youtube:a", snaps)],
+            [FakeSource(target, snaps)],
             ChimeConfig(UP, DOWN),
             play=played.append,
         )
@@ -53,8 +57,8 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         played: list[Path] = []
         await monitor(
             [
-                FakeSource("youtube:a", [live(a, 1), live(a, 2)]),
-                FakeSource("twitch:b", [live(b, 100), live(b, 100)]),
+                FakeSource(a, [live(a, 1), live(a, 2)]),
+                FakeSource(b, [live(b, 100), live(b, 100)]),
             ],
             ChimeConfig(UP, DOWN),
             play=played.append,
@@ -66,7 +70,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         buffer = io.StringIO()
         with redirect_stdout(buffer):
             await monitor(
-                [FakeSource("youtube:chan", [live(a, 5), live(a, 9)])],
+                [FakeSource(a, [live(a, 5), live(a, 9)])],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
             )
@@ -80,7 +84,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         await monitor(
             [
                 FakeSource(
-                    "youtube:a",
+                    a,
                     [
                         live(a, 5),  # baseline
                         StreamSnapshot.offline(a),  # offline clears the baseline
@@ -107,7 +111,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         # completes normally. Two warnings pins that it kept going after the first.
         with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
             await monitor(
-                [FakeSource("youtube:a", [live(a, 1), live(a, 2), live(a, 3)])],
+                [FakeSource(a, [live(a, 1), live(a, 2), live(a, 3)])],
                 ChimeConfig(UP, DOWN),
                 play=boom,
             )
@@ -119,17 +123,34 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             await monitor(
                 [
                     ExplodingSource(),
-                    FakeSource("youtube:a", [live(healthy, 1), live(healthy, 4)]),
+                    FakeSource(healthy, [live(healthy, 1), live(healthy, 4)]),
                 ],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
             )
         # Pin the full wrapper message and the preserved cause: this fails if
-        # the naming wrapper or its `from error` chaining is dropped.
+        # the channel-naming wrapper or its `from error` chaining is dropped.
         messages = [str(error) for error in ctx.exception.exceptions]
-        self.assertIn("source channel-x failed", messages)
+        self.assertIn("source twitch:channel-x failed", messages)
         causes = [type(error.__cause__) for error in ctx.exception.exceptions]
         self.assertIn(RuntimeError, causes)
+
+    async def test_recovery_from_a_failed_poll_re_baselines_rather_than_spanning_it(
+        self,
+    ) -> None:
+        # While a poll is failing the watcher is blind, so the count it last saw
+        # is a pre-outage sample. Keeping it would chime "10 -> 500" on the first
+        # read back — a delta measured across an unbounded gap. Clearing the
+        # baseline makes the recovery poll re-baseline silently instead; only
+        # the genuine 500 -> 502 rise after it chimes.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        played: list[Path] = []
+        await monitor(
+            [FakeSource(a, [live(a, 10), None, live(a, 500), live(a, 502)])],
+            ChimeConfig(UP, DOWN),
+            play=played.append,
+        )
+        self.assertEqual(played, [UP])
 
 
 if __name__ == "__main__":

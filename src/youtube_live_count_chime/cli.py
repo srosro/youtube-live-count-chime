@@ -113,8 +113,8 @@ def build_sources(config: Config) -> list[StreamSource]:
     seen: set[str] = set()
 
     def add(source: StreamSource) -> None:
-        if source.name not in seen:
-            seen.add(source.name)
+        if source.target.key not in seen:
+            seen.add(source.target.key)
             sources.append(source)
 
     for handle in config.youtube:
@@ -143,7 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     chime = ChimeConfig(config.up_sound, config.down_sound)
-    names = ", ".join(source.name for source in sources)
+    names = ", ".join(source.target.key for source in sources)
     print(f"Monitoring {names}. Press Ctrl-C to stop.", flush=True)
     try:
         asyncio.run(monitor(sources, chime))
