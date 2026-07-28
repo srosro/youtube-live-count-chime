@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "youtube-live-count-chime"
 version = "0.1.0"
-description = "Chime when a YouTube or Twitch live viewer count changes, and speak the rises."
+description = "Chime on macOS when a YouTube or Twitch live viewer count changes, and speak the rises."
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = []
