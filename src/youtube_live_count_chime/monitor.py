@@ -87,7 +87,7 @@ async def monitor(
                     direction = "up" if delta > 0 else "down"
                     sound = config.up_sound if delta > 0 else config.down_sound
                     print(
-                        f"{source.name}: {previous.viewers} -> {snapshot.viewers} "
+                        f"{source.target.key}: {previous.viewers} -> {snapshot.viewers} "
                         f"({direction})",
                         flush=True,
                     )
@@ -100,7 +100,7 @@ async def monitor(
                             await asyncio.to_thread(play, sound)
                         except SoundPlaybackError as error:
                             _LOGGER.warning(
-                                "could not play chime for %s: %s", source.name, error
+                                "could not play chime for %s: %s", source.target.key, error
                             )
                     if delta > 0:
                         rise = delta
@@ -120,12 +120,12 @@ async def monitor(
                         await asyncio.to_thread(notify, title, roster.render())
                     except NotificationError as error:
                         _LOGGER.warning(
-                            "could not notify for %s: %s", source.name, error
+                            "could not notify for %s: %s", source.target.key, error
                         )
                 previous = snapshot
         except Exception as error:
             # Name the channel in the failure that main will report.
-            raise RuntimeError(f"source {source.name} failed") from error
+            raise RuntimeError(f"source {source.target.key} failed") from error
 
     async with asyncio.TaskGroup() as group:
         for source in sources:

@@ -247,7 +247,8 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
     def test_for_login_normalizes_and_rejects(self) -> None:
         # Charset matrix is in test_models.NormalizeHandleTests; confirm delegation.
         self.assertEqual(
-            TwitchSource.for_login("@Shroud", TwitchClient(CREDS)).name, "twitch:shroud"
+            TwitchSource.for_login("@Shroud", TwitchClient(CREDS)).target.key,
+            "twitch:shroud",
         )
         with self.assertRaises(ValueError):
             TwitchSource.for_login("@", TwitchClient(CREDS))

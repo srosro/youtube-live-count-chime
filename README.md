@@ -181,16 +181,13 @@ A join and a departure between polls can cancel out, and only the resulting
 displayed count is observable. Monitoring is limited to publicly live channels.
 
 A failed poll — an unreachable page, or an unparseable YouTube page or Helix
-response — yields no observation at all on either platform, so it never chimes
-on its own and the last count is kept. What differs is an *ended* stream: the
-Twitch source receives an explicit offline signal and clears that channel's
-baseline, while the YouTube source cannot tell an ended stream from an
-unparseable page and reports both the same way: one warning at the start of the
-outage, then silence until a poll succeeds. Because a new broadcast has a
-different stream id, it re-baselines silently instead of chiming against the old
-count. One caveat of keeping the last count on any outage: if the *same* stream
-returns after a long gap, the next observation chimes once for the whole
-accumulated drift.
+response — makes that channel's count *unknown*: it never chimes on its own, it
+renders as `?` in the notification digest, and its chime baseline is cleared, so
+the first poll back re-baselines silently instead of chiming the whole gap-wide
+drift. What differs is an *ended* stream: the Twitch source receives an explicit
+offline signal and reports the channel as `offline`, while the YouTube source
+cannot tell an ended stream from an unparseable page and reports both the same
+way: one warning at the start of the outage, then silence until a poll succeeds.
 
 ## Development
 

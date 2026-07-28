@@ -25,7 +25,6 @@ class FakeSource:
         self, target: StreamTarget, snaps: Sequence[StreamSnapshot | None]
     ) -> None:
         self.target = target
-        self.name = target.key
         self._snaps = snaps
 
     async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
@@ -35,7 +34,6 @@ class FakeSource:
 
 class ExplodingSource:
     target = StreamTarget(Platform.TWITCH, "channel-x")
-    name = "channel-x"
 
     async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         raise RuntimeError("upstream failure")
@@ -175,7 +173,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         # Pin the full wrapper message and the preserved cause: this fails if
         # the channel-naming wrapper or its `from error` chaining is dropped.
         messages = [str(error) for error in ctx.exception.exceptions]
-        self.assertIn("source channel-x failed", messages)
+        self.assertIn("source twitch:channel-x failed", messages)
         causes = [type(error.__cause__) for error in ctx.exception.exceptions]
         self.assertIn(RuntimeError, causes)
 

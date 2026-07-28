@@ -170,8 +170,8 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.viewers, 12)
 
     def test_for_handle_normalizes_prefix_and_case(self) -> None:
-        self.assertEqual(YouTubeSource.for_handle("@MKBHD").name, "youtube:mkbhd")
-        self.assertEqual(YouTubeSource.for_handle("  ltt ").name, "youtube:ltt")
+        self.assertEqual(YouTubeSource.for_handle("@MKBHD").target.key, "youtube:mkbhd")
+        self.assertEqual(YouTubeSource.for_handle("  ltt ").target.key, "youtube:ltt")
 
     def test_for_handle_rejects_unusable_handle(self) -> None:
         # Full accept/reject matrix lives in test_models.NormalizeHandleTests;

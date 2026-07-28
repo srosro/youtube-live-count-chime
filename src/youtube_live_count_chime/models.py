@@ -94,10 +94,6 @@ class StreamSource(Protocol):
     """An asynchronous source of stream snapshots."""
 
     @property
-    def name(self) -> str:
-        """Return a stable display name for this source."""
-
-    @property
     def target(self) -> StreamTarget:
         """Return the channel this source polls."""
 
