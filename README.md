@@ -122,9 +122,14 @@ notification banners while it captures the screen, so while you are live the
 banner never displays, but audio is not suppressed.
 
 The order on a rise is chime, then announcement, then banner. Speech shares the
-chime's audio lock, so two channels rising at once never talk over each other;
-the cost is that a rise holds that channel's poll for roughly one extra
-interval (about 4.6s of chime plus speech).
+chime's audio lock — one lock for every watched channel — so two channels
+rising at once never talk over each other. The cost is fleet-wide, not
+per-channel: a rise holds that lock for about 5.5s (a ~1.9s chime plus a ~3.6s
+spoken line), and for that whole time any *other* channel whose count changes
+waits too. Since 5.5s already exceeds the 5s poll interval, several channels
+rising together serialize at roughly 5.5s each. Only a rise pays it: an
+unchanged poll costs nothing at all, and a fall pays only the chime it has
+always paid.
 
 The notification body is a digest of every channel being watched, always in the
 same order:
