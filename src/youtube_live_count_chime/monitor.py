@@ -105,11 +105,13 @@ async def monitor(
                     #
                     # Speech is audio too, so it shares the chime's lock:
                     # two channels rising at once must never talk over each
-                    # other or over a chime. Known and accepted cost — a
-                    # chime plus a spoken line holds the lock ~4.6s, so a
-                    # rise delays that channel's next poll by roughly one
-                    # extra interval. That is the chosen shape: a bare chime
-                    # is inaudible as information while streaming.
+                    # other or over a chime. Measured cost, accepted: Glass
+                    # is ~1.9s and a spoken line ~3.6s, so a rise holds the
+                    # lock ~5.5s and delays that channel's next poll by about
+                    # one extra interval. Only a rise pays it — an unchanged
+                    # poll costs nothing, and a fall pays only the chime it
+                    # already paid. That is the chosen shape: a bare chime
+                    # carries no information while streaming.
                     announcement = describe_rise(source.target, delta)
                     async with chime_lock:
                         try:
