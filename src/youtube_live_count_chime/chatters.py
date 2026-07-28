@@ -137,7 +137,24 @@ class ChatterClient:
             access,
             refresh if isinstance(refresh, str) and refresh else token.refresh_token,
         )
-        self.store.save(rotated)
+        try:
+            self.store.save(rotated)
+        except TokenStoreError:
+            # Twitch redeemed the old refresh token the moment the POST above
+            # succeeded, so the previous grant is already dead and the rotated
+            # one is now lost. Every later poll would re-present the stale
+            # stored token and burn a refresh against a redeemed one; memoize
+            # it as unusable, on the same one-telling path as a permanent 401.
+            self._unauthorized.add(token.access_token)
+            _LOGGER.error(
+                "Could not store the refreshed Twitch token for %s, and the "
+                "previous one is no longer valid. Repair the token store, then "
+                "run --auth %s again. Arrivals on that channel will not be "
+                "named until then.",
+                token.login,
+                token.login,
+            )
+            raise
         return rotated
 
     def _unauthorized_error(self, login: str) -> TwitchAuthError:

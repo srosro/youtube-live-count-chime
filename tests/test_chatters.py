@@ -457,6 +457,48 @@ class ChatterClientTests(unittest.TestCase):
         ):
             self.assertEqual(client.chatters(granted), frozenset({"joe_doe"}))
 
+    def test_a_failed_save_during_a_refresh_short_circuits_later_polls(self) -> None:
+        # Twitch redeems the old refresh token the moment the refresh POST
+        # succeeds, so a save that then fails leaves the rotated credentials
+        # lost and the previous grant dead. Refreshing again would present a
+        # redeemed refresh token every poll, so the stale stored token must be
+        # short-circuited — and the operator told what to repair, once.
+        class _UnwritableStore:
+            def save(self, token: StoredToken) -> None:
+                raise TokenStoreError("could not write tokens.json: read-only")
+
+        client = ChatterClient(TwitchCredentials("id", "secret"), _UnwritableStore())
+        responses: list[object] = [
+            self._http_error(401),  # the read: token expired
+            {"access_token": "fresh-placeholder", "refresh_token": "rotated"},
+        ]
+
+        def fake_get_json(request: object) -> object:
+            item = responses.pop(0)
+            if isinstance(item, HTTPError):
+                raise item
+            return item
+
+        with patch(
+            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
+        ):
+            with self.assertLogs("youtube_live_count_chime.chatters", "ERROR") as logs:
+                with self.assertRaises(TokenStoreError):
+                    client.chatters(TOKEN)
+
+        self.assertEqual(responses, [])  # one read, one refresh, no retry
+        told = "\n".join(logs.output)
+        self.assertIn("Repair the token store", told)
+        self.assertIn("--auth watchmepivot", told)
+
+        # The store still holds the stale token, so every later poll presents
+        # it: no read, no second refresh POST, and no second telling.
+        with patch("youtube_live_count_chime.chatters.get_json") as get_json:
+            with self.assertNoLogs("youtube_live_count_chime.chatters", "ERROR"):
+                with self.assertRaises(TwitchAuthError):
+                    client.chatters(TOKEN)
+        self.assertEqual(get_json.call_count, 0)
+
     def test_a_non_401_failure_is_not_retried(self) -> None:
         client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())
         responses: list[object] = [self._http_error(500)]
