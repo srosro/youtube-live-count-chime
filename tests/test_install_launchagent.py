@@ -58,7 +58,11 @@ class InstallLaunchAgentArgumentTests(unittest.TestCase):
                 result = self._install(flag, "watchmepivot", "-t", "watchmepivot")
 
                 self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn(flag, result.stderr)
+                # Pin the line that echoes what the operator actually typed.
+                # A bare `assertIn(flag, ...)` cannot fail: the guard's static
+                # guidance spells out `--auth` three times, so "--a", "--au"
+                # and "--auth" are all substrings of stderr regardless.
+                self.assertIn(f"{flag} authorizes one account and exits", result.stderr)
                 self.assertFalse(self.ran.exists())  # no --check, so no browser
                 self.assertFalse((self.home / "Library").exists())
 
