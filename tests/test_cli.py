@@ -232,22 +232,18 @@ class MainTests(_CliTestCase):
 
 
 class AuthFlagTests(_CliTestCase):
-    def test_auth_flag_parses_a_login(self) -> None:
+    def test_auth_parses_a_login_and_needs_no_channel(self) -> None:
+        # Authorizing is a setup step; it runs before any channel is configured.
         config = parse_config(self.argv("--auth", "watchmepivot"))
 
         self.assertEqual(config.auth, "watchmepivot")
+        self.assertEqual(config.youtube, ())
+        self.assertEqual(config.twitch, ())
 
     def test_auth_defaults_to_none(self) -> None:
         config = parse_config(self.argv("-t", "shroud"))
 
         self.assertIsNone(config.auth)
-
-    def test_auth_does_not_require_a_channel(self) -> None:
-        # Authorizing is a setup step; it runs before any channel is configured.
-        config = parse_config(self.argv("--auth", "watchmepivot"))
-
-        self.assertEqual(config.youtube, ())
-        self.assertEqual(config.twitch, ())
 
     def test_auth_runs_before_channel_validation(self) -> None:
         # --auth must be handled before build_sources, so a first-time setup
@@ -270,47 +266,37 @@ class AuthFlagTests(_CliTestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(captured["login"], "watchmepivot")
 
-    def test_auth_error_prints_clean_message_and_exits_2(self) -> None:
-        def fake_run_auth_flow(
-            login: str, credentials: object, store: object, **kwargs: object
-        ) -> StoredToken:
-            raise AuthError("authorization was refused")
-
-        env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
-        stderr = StringIO()
-        with (
-            patch.dict(os.environ, env, clear=True),
-            patch("youtube_live_count_chime.cli.run_auth_flow", fake_run_auth_flow),
-            redirect_stderr(stderr),
+    def test_a_failing_auth_flow_prints_a_clean_message_and_exits_2(self) -> None:
+        # Both reach the user through one main() branch: an authorization
+        # Twitch refused, and store.save() (the last step of run_auth_flow)
+        # failing on an unwritable ~/.config, ENOSPC, or a parent path occupied
+        # by a file. Neither may escape as a traceback.
+        for failure in (
+            AuthError("authorization was refused"),
+            TokenStoreError("could not write /tokens.json: not a directory"),
         ):
-            exit_code = main(self.argv("--auth", "watchmepivot"))
+            with self.subTest(type(failure).__name__):
 
-        self.assertEqual(exit_code, 2)
-        self.assertIn("Error: authorization was refused", stderr.getvalue())
+                def fake_run_auth_flow(
+                    login: str, credentials: object, store: object, **kwargs: object
+                ) -> StoredToken:
+                    raise failure
 
-    def test_unwritable_token_store_prints_clean_message_and_exits_2(self) -> None:
-        # store.save() (the last step of run_auth_flow) can raise TokenStoreError
-        # on an unwritable ~/.config, ENOSPC, or a parent path occupied by a
-        # file. That must produce the same clean shape as every other failure
-        # here, not an uncaught traceback.
-        def fake_run_auth_flow(
-            login: str, credentials: object, store: object, **kwargs: object
-        ) -> StoredToken:
-            raise TokenStoreError("could not write /tokens.json: not a directory")
+                env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
+                stderr = StringIO()
+                with (
+                    patch.dict(os.environ, env, clear=True),
+                    patch(
+                        "youtube_live_count_chime.cli.run_auth_flow", fake_run_auth_flow
+                    ),
+                    redirect_stderr(stderr),
+                ):
+                    exit_code = main(self.argv("--auth", "watchmepivot"))
 
-        env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
-        stderr = StringIO()
-        with (
-            patch.dict(os.environ, env, clear=True),
-            patch("youtube_live_count_chime.cli.run_auth_flow", fake_run_auth_flow),
-            redirect_stderr(stderr),
-        ):
-            exit_code = main(self.argv("--auth", "watchmepivot"))
-
-        self.assertEqual(exit_code, 2)
-        output = stderr.getvalue()
-        self.assertTrue(output.startswith("Error: "))
-        self.assertNotIn("Traceback", output)
+                self.assertEqual(exit_code, 2)
+                output = stderr.getvalue()
+                self.assertEqual(output.strip(), f"Error: {failure}")
+                self.assertNotIn("Traceback", output)
 
     def test_malformed_auth_handle_exits_cleanly(self) -> None:
         # normalize_handle (called inside run_auth_flow, before it opens a

@@ -42,45 +42,29 @@ class ParseCallbackTests(unittest.TestCase):
             parse_callback("/?code=abc123&state=expected", "expected"), "abc123"
         )
 
-    def test_rejects_a_mismatched_state(self) -> None:
-        # CSRF guard: a callback we did not initiate must never be accepted.
-        with self.assertRaises(AuthError):
-            parse_callback("/?code=abc123&state=attacker", "expected")
-
-    def test_surfaces_a_denied_consent(self) -> None:
-        with self.assertRaises(AuthError):
-            parse_callback("/?error=access_denied&state=expected", "expected")
-
-    def test_rejects_a_callback_with_no_code(self) -> None:
-        with self.assertRaises(AuthError):
-            parse_callback("/?state=expected", "expected")
-
-    def test_failure_reason_precedence(self) -> None:
-        # State is checked first, and error before code — verified by the
-        # exact message raised, not just "some AuthError was raised", so a
-        # future reordering of the checks would fail loudly instead of
-        # shipping silently.
+    def test_every_rejection_and_its_reason(self) -> None:
+        # Each case is pinned by the message raised, not just "some AuthError",
+        # so the check order (state first, then error, then code) is pinned too
+        # and a future reordering fails loudly instead of shipping silently.
         cases = {
+            # CSRF guard: a callback we did not initiate must never be accepted,
+            # whatever else it carries.
+            "mismatched_state": ("/?code=abc123&state=attacker", "state did not match"),
             "state_mismatch_over_a_present_error": (
                 "/?error=access_denied&state=attacker",
-                "expected",
                 "state did not match",
             ),
-            "state_mismatch_over_a_present_code": (
-                "/?code=abc123&state=attacker",
-                "expected",
-                "state did not match",
-            ),
+            "denied_consent": ("/?error=access_denied&state=expected", "was refused"),
             "error_wins_over_code_when_state_matches": (
                 "/?code=abc123&error=access_denied&state=expected",
-                "expected",
                 "was refused",
             ),
+            "no_code": ("/?state=expected", "carried no code"),
         }
-        for name, (path, expected_state, message_fragment) in cases.items():
+        for name, (path, message_fragment) in cases.items():
             with self.subTest(name):
                 with self.assertRaisesRegex(AuthError, message_fragment):
-                    parse_callback(path, expected_state)
+                    parse_callback(path, "expected")
 
 
 class ParseTokenResponseTests(unittest.TestCase):
@@ -90,13 +74,11 @@ class ParseTokenResponseTests(unittest.TestCase):
             ("access-tok", "refresh-tok"),
         )
 
-    def test_rejects_a_response_missing_an_access_token(self) -> None:
-        with self.assertRaises(AuthError):
-            parse_token_response({"refresh_token": "refresh-tok"})
-
-    def test_rejects_a_response_missing_a_refresh_token(self) -> None:
-        with self.assertRaises(AuthError):
-            parse_token_response({"access_token": "access-tok"})
+    def test_rejects_a_response_missing_either_token(self) -> None:
+        for payload in ({"refresh_token": "refresh-tok"}, {"access_token": "access-tok"}):
+            with self.subTest(present=sorted(payload)):
+                with self.assertRaises(AuthError):
+                    parse_token_response(payload)
 
 
 class ParseIdentityTests(unittest.TestCase):
