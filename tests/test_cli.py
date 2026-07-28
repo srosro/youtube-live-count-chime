@@ -143,6 +143,23 @@ class MainTests(_CliTestCase):
         ):
             self.assertEqual(main(self.argv("--check", "-y", "@mkbhd")), 0)
 
+    def test_check_wins_over_auth_so_validation_is_never_interactive(self) -> None:
+        # The launchd installer validates with `--check "$@"`, so a --auth in
+        # those arguments must not open a browser and bind a port instead of
+        # validating.
+        def fail_if_called(
+            login: str, credentials: object, store: object, **kwargs: object
+        ) -> StoredToken:
+            raise AssertionError("--check must not run the auth flow")
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("youtube_live_count_chime.cli.run_auth_flow", fail_if_called),
+        ):
+            exit_code = main(self.argv("--check", "--auth", "watchmepivot", "-y", "@mkbhd"))
+
+        self.assertEqual(exit_code, 0)
+
     def test_check_fails_on_missing_twitch_creds(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(main(self.argv("--check", "-t", "shroud")), 2)

@@ -161,7 +161,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     config = parse_config(argv)
 
-    if config.auth is not None:
+    # --check is the installer's validation run and must never be interactive,
+    # whatever else it is passed: it takes precedence over --auth so that
+    # `--check --auth LOGIN` validates the configuration rather than opening a
+    # browser and binding a port.
+    if config.auth is not None and not config.check:
         try:
             token = run_auth_flow(config.auth, TwitchCredentials.from_env(), TokenStore())
         except (AuthError, TwitchAuthError, ValueError) as error:

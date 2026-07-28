@@ -132,8 +132,8 @@ notifications degrade to `+N watching youtube <handle>`.
 2. Authorize each account you broadcast from:
 
    ```sh
-   youtube-live-count-chime --auth watchmepivot
-   youtube-live-count-chime --auth samtriestobuild
+   .venv/bin/youtube-live-count-chime --auth watchmepivot
+   .venv/bin/youtube-live-count-chime --auth samtriestobuild
    ```
 
    Each run opens a browser once. Tokens are stored in

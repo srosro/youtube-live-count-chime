@@ -29,13 +29,18 @@ while [ "$#" -gt 0 ]; do
         # KeepAlive. (--check is the only --c* watcher flag; --help the only --h*.)
         --check | --c*)
             echo "$1 makes the watcher exit without watching — omit it" >&2; exit 2 ;;
-        # --auth is the same class: it exits after authorizing one account, and
-        # it is interactive (opens a browser, binds a port), so the validation
-        # run below would launch the flow instead of validating — main() handles
-        # --auth before --check. (--auth is the only --a* watcher flag.)
+        # --auth is the same class: it exits after authorizing one account, so
+        # baked into the agent it would respawn-loop under KeepAlive too. (It
+        # is also interactive, but --check short-circuits it, so the validation
+        # run below would validate rather than open a browser regardless.)
+        # --auth is the only --a* watcher flag.
         --auth | --a*)
-            echo "$1 exits after authorizing an account — run it directly," >&2
-            echo "then install without it: youtube-live-count-chime --auth LOGIN" >&2
+            echo "$1 authorizes one account and exits — it must not go in the agent." >&2
+            echo "Authorize first, from this shell (--auth needs the credentials in" >&2
+            echo "the environment, which the installer's --env-file does not export):" >&2
+            echo "    set -a; . ./twitch.env; set +a" >&2
+            echo "    .venv/bin/youtube-live-count-chime --auth LOGIN" >&2
+            echo "Then re-run this installer with only your channel flags." >&2
             exit 2 ;;
         --env-file) [ "$#" -ge 2 ] || { echo "--env-file needs a path" >&2; exit 2; }
             src_env="$2"; shift 2 ;;
