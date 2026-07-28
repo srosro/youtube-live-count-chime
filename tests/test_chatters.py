@@ -257,6 +257,24 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
         self.assertEqual(len(again.records), 1)
 
+    async def test_a_failed_stream_poll_does_not_re_arm_the_outage_warning(self) -> None:
+        # invalidate() runs on every failed *stream* poll, which is neither the
+        # transition into a roster outage nor a recovery from one. With the
+        # chatters endpoint persistently down and the stream poll flapping,
+        # re-arming there would re-warn once per flap at the 5s cadence — the
+        # spam the warn-once exists to suppress.
+        namer = TwitchChatterNamer(
+            _ExplodingClient(TwitchRequestError("chatters unavailable")),
+            _FakeStore(TOKEN),
+        )
+
+        with self.assertLogs("youtube_live_count_chime.chatters", "WARNING") as logs:
+            for _ in range(3):
+                self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
+                namer.invalidate(TARGET)  # the stream poll fails, then recovers
+
+        self.assertEqual(len(logs.records), 1)
+
     async def test_a_change_of_cause_warns_again_with_the_new_diagnosis(self) -> None:
         # The two failure paths report different causes, and an operator who
         # repairs the token file only to hit a never-granted scope must be told

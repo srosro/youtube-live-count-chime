@@ -195,7 +195,7 @@ class ChatterClient:
 
 @dataclass(slots=True)
 class _ChannelState:
-    """What is remembered about one channel between polls, invalidated as a unit.
+    """What is remembered about one channel between polls.
 
     ``roster`` is dropped by every failure path, so the next successful read
     reseeds instead of diffing across the gap and naming someone who joined
@@ -233,11 +233,13 @@ class TwitchChatterNamer:
         return ()
 
     def invalidate(self, target: StreamTarget) -> None:
-        """Drop a channel's baseline after a failed poll, so the next read reseeds.
+        """Drop a channel's roster baseline after a failed poll, so it reseeds.
 
         Diffing across the gap would name everyone who joined during it.
+        ``cause`` survives: a failed *stream* poll is neither the transition
+        into a roster outage nor a recovery, so re-arming would re-warn per flap.
         """
-        self._state.pop(target.key, None)
+        self._state.setdefault(target.key, _ChannelState()).roster = None
 
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
         """Return newly-seen chatters, or ``()`` when a name cannot be known."""
