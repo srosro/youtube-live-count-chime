@@ -110,8 +110,8 @@ async def monitor(
                     # under the *same* single acquisition — channels rising at
                     # once must not talk over each other, and a chime must not
                     # be split from the announcement it introduces. The lock is
-                    # shared by every source, so that serializes any other
-                    # channel's change too; only a rise pays it.
+                    # shared by every source, so every change serializes against
+                    # every other; a rise just holds it longer, for both.
                     if rising:
                         announcement = describe_rise(source.target, delta)
                         async with chime_lock:
