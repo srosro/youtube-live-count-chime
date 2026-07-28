@@ -112,9 +112,12 @@ class TokenStoreTests(unittest.TestCase):
         )
         self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
 
-    def test_a_crash_mid_write_leaves_the_previous_tokens_intact(self) -> None:
-        # An interrupted write must not truncate a file: a half-written one is
-        # unparseable JSON, which fails every later read for that account.
+    def test_a_crash_while_rotating_leaves_the_previous_token_readable(self) -> None:
+        # The one production path that overwrites an existing token file is a
+        # refresh rotation (ChatterClient._refresh -> save). An implementation
+        # that truncated or unlinked the target before writing would destroy a
+        # live token on every failed refresh, leaving unparseable JSON that
+        # fails every later read for that account.
         store = TokenStore(self.directory)
         store.save(_token("watchmepivot"))
 
@@ -122,17 +125,26 @@ class TokenStoreTests(unittest.TestCase):
             "youtube_live_count_chime.tokens.json.dump", side_effect=OSError("disk full")
         ):
             with self.assertRaises(TokenStoreError):
-                store.save(_token("samtriestobuild"))
+                store.save(StoredToken("watchmepivot", "id-rotated", "a2", "r2"))
 
-        reloaded = TokenStore(self.directory)
-        restored = reloaded.get("watchmepivot")
+        restored = TokenStore(self.directory).get("watchmepivot")
         assert restored is not None
         self.assertEqual(restored.user_id, "id-watchmepivot")
-        self.assertIsNone(reloaded.get("samtriestobuild"))
         # And no half-written temp file is left behind next to the tokens.
         self.assertEqual(
             sorted(p.name for p in self.directory.iterdir()), ["watchmepivot.json"]
         )
+
+    def test_saving_one_account_leaves_another_accounts_file_untouched(self) -> None:
+        # What one file per login owes: authorizing B must not rewrite A's file
+        # at all, so the two can never lose each other's update.
+        store = TokenStore(self.directory)
+        store.save(_token("watchmepivot"))
+        before = self._file("watchmepivot").read_bytes()
+
+        store.save(_token("samtriestobuild"))
+
+        self.assertEqual(self._file("watchmepivot").read_bytes(), before)
 
     def test_an_unwritable_location_fails_as_a_store_error_not_a_bare_oserror(
         self,
