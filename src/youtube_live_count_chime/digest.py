@@ -15,6 +15,15 @@ _SEPARATOR: Final = " · "
 _UNPOLLED: Final = "?"
 
 
+def describe_rise(target: StreamTarget, delta: int) -> str:
+    """Describe one channel's rise, for both the spoken line and the banner title.
+
+    A rise is announced twice — aloud through ``say`` and on the banner — and
+    the two must be the same sentence, so this is the one place it is worded.
+    """
+    return f"{delta} new viewer{'s' if delta > 1 else ''} on {target.label}"
+
+
 def render_roster(
     order: Sequence[StreamTarget],
     counts: dict[StreamTarget, int | None],

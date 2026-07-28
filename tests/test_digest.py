@@ -1,11 +1,23 @@
 import unittest
 
-from youtube_live_count_chime.digest import render_roster
+from youtube_live_count_chime.digest import describe_rise, render_roster
 from youtube_live_count_chime.models import Platform, StreamTarget
 
 
 TWITCH_A = StreamTarget(Platform.TWITCH, "watchmepivot")
 YOUTUBE_A = StreamTarget(Platform.YOUTUBE, "srosrosr")
+
+
+class DescribeRiseTests(unittest.TestCase):
+    def test_counts_viewers_with_the_matching_plural(self) -> None:
+        # This sentence is read aloud, so the plural has to be right in both
+        # directions — "1 new viewers" is audibly wrong.
+        for delta, expected in ((1, "1 new viewer"), (2, "2 new viewers")):
+            with self.subTest(delta=delta):
+                self.assertEqual(
+                    describe_rise(TWITCH_A, delta),
+                    f"{expected} on twitch watchmepivot",
+                )
 
 
 class RenderRosterTests(unittest.TestCase):
