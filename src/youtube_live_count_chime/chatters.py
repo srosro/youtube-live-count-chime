@@ -80,14 +80,12 @@ class ChatterClient:
 
     credentials: TwitchCredentials
     store: _TokenSaver
-    # Access tokens Helix still rejected after a refresh. Helix answers 401 for
-    # permanent conditions too (the moderator:read:chatters scope was never
-    # granted, or the authorized user is not the broadcaster), and retrying
-    # those would burn a refresh rotation on every poll — Twitch rate-limits
-    # refreshes and invalidates a redeemed refresh token, so the loop could
-    # eventually destroy the stored grant. Keyed by the rejected token rather
-    # than by its login, so a token a later --auth stored is tried instead of
-    # short-circuited until the watcher is restarted.
+    # Access tokens Helix still rejected after a refresh — a permanent 401 (the
+    # moderator:read:chatters scope was never granted). Retrying would burn a
+    # refresh rotation every poll, and Twitch rate-limits refreshes and
+    # invalidates a redeemed one, so the loop could destroy the stored grant.
+    # Keyed by the rejected token, not its login, so a token a later --auth
+    # stored is tried rather than short-circuited until the watcher restarts.
     _unauthorized: set[str] = field(default_factory=set)
 
     def _request(self, token: StoredToken) -> frozenset[str]:
@@ -164,10 +162,9 @@ class ChatterClient:
                 raise TwitchRequestError(
                     f"Twitch chatters request failed (HTTP {error.code})"
                 ) from error
-            # A freshly refreshed token rejected again is a permanent 401, not
-            # an expiry. Remember both so no further poll retries: the rotated
-            # one is what the store now holds, and the original is what a
-            # caller holding a pre-refresh copy would present. Logged once.
+            # A freshly refreshed token rejected again is permanent, not an
+            # expiry. Remember both: the rotated one is what the store now
+            # holds, the original what a stale caller would present.
             self._unauthorized.update((token.access_token, rotated.access_token))
             _LOGGER.error(
                 "Twitch refuses the chat roster for %s. Run --auth %s again, "
