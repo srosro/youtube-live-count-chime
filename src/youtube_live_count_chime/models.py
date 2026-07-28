@@ -110,10 +110,9 @@ async def poll_snapshots(
 ) -> AsyncIterator[StreamSnapshot | None]:
     """Poll ``fetch`` forever, yielding snapshots and surviving fetch failures.
 
-    A failed poll yields ``None``: the channel's state is *unknown*, which is
-    not ``StreamSnapshot.offline()`` ("confirmed not streaming"). Skipping the
-    yield instead would leave the consumer holding a pre-outage count and a
-    pre-outage chat roster, and publishing both as current.
+    A failed poll yields ``None``: the channel is *unknown*, which is not
+    ``StreamSnapshot.offline()`` ("confirmed not streaming"). Skipping the
+    yield instead leaves the consumer publishing pre-outage state as current.
 
     An unreachable channel fails every poll, so warn only on the transition
     *into* failure; a successful poll re-arms it for the next distinct outage.

@@ -140,11 +140,10 @@ class ChatterClient:
         try:
             self.store.save(rotated)
         except TokenStoreError:
-            # Twitch redeemed the old refresh token the moment the POST above
-            # succeeded, so the previous grant is already dead and the rotated
-            # one is now lost. Every later poll would re-present the stale
-            # stored token and burn a refresh against a redeemed one; memoize
-            # it as unusable, on the same one-telling path as a permanent 401.
+            # The POST above redeemed the old refresh token, so the previous
+            # grant is dead and the rotated one is now lost. Later polls would
+            # re-present the stale stored token and refresh against a redeemed
+            # one; memoize it, on the same one-telling path as a permanent 401.
             self._unauthorized.add(token.access_token)
             _LOGGER.error(
                 "Could not store the refreshed Twitch token for %s, and the "
@@ -236,8 +235,7 @@ class TwitchChatterNamer:
     def invalidate(self, target: StreamTarget) -> None:
         """Drop a channel's baseline after a failed poll, so the next read reseeds.
 
-        The watcher was blind for that interval, and diffing across it would
-        name everyone who joined while it could not see.
+        Diffing across the gap would name everyone who joined during it.
         """
         self._state.pop(target.key, None)
 

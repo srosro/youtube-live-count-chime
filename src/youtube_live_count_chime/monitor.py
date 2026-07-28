@@ -60,13 +60,12 @@ async def monitor(
         try:
             async for snapshot in source.snapshots():
                 if snapshot is None:
-                    # A failed poll: this channel's state is unknown, not
-                    # offline. Publishing its pre-outage count in another
-                    # channel's digest would pass a stale number off as
-                    # current, and diffing the next chat roster against the
-                    # pre-outage one would name people who joined while the
-                    # watcher was blind. The chime baseline survives, so
-                    # recovery neither chimes spuriously nor re-baselines.
+                    # A failed poll: this channel is unknown, not offline. Its
+                    # pre-outage count and chat roster are stale, and keeping
+                    # either publishes a stale number in another channel's
+                    # digest or names someone who joined while we were blind.
+                    # The chime baseline survives, so recovery neither chimes
+                    # spuriously nor re-baselines.
                     roster.discard(source.target)
                     if namer is not None:
                         namer.invalidate(source.target)
