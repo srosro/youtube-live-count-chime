@@ -186,13 +186,11 @@ class _ChannelState:
 
     ``roster`` is dropped by every failure path, so the next successful read
     reseeds instead of diffing across the gap and naming someone who joined
-    during it. ``cause`` is the outage currently being suffered: the monitor
-    samples every poll and these failures persist across polls (a channel that
-    never granted the scope, a Helix outage, a corrupt token file), so warn
-    only on the transition *into* an outage and re-arm on success. It holds the
-    *cause*, not the message — the roster branch alone raises three exceptions
-    behind one message, so keying by message would leave an operator holding
-    "Helix is down" after the real cause had become an unwritable token store.
+    during it. ``cause`` is the outage currently being suffered — these persist
+    across polls, so warn only on the transition *into* one and re-arm on
+    success. It holds the cause, not the message: the roster branch raises
+    three exceptions behind one message, so keying by message would leave an
+    operator holding "Helix is down" after the cause had become a bad token.
     """
 
     stream_id: str | None = None

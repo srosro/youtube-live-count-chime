@@ -9,8 +9,9 @@ import logging
 from pathlib import Path
 from typing import Final
 
+from youtube_live_count_chime.chatters import TwitchChatterNamer
 from youtube_live_count_chime.digest import Roster, render_title
-from youtube_live_count_chime.models import ArrivalNamer, StreamSnapshot, StreamSource
+from youtube_live_count_chime.models import StreamSnapshot, StreamSource
 from youtube_live_count_chime.notify import NotificationError, post_notification
 from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
 
@@ -32,7 +33,7 @@ async def monitor(
     *,
     play: Callable[[Path], None] = play_sound,
     notify: Callable[[str, str], None] = post_notification,
-    namer: ArrivalNamer | None = None,
+    namer: TwitchChatterNamer | None = None,
 ) -> None:
     """Watch every source concurrently, chiming and notifying on count changes.
 
@@ -40,11 +41,10 @@ async def monitor(
     roster reveals it. The roster of current counts is shared across consumers
     so every notification carries the same fixed-shape digest. The chime
     fires first and unconditionally, ahead of both the chat-roster round
-    trip and the osascript call. Naming, playback, and notification
-    failures are each warned and skipped so one channel's glitch never
-    stops the watcher: an unnamed notification still posts, a failed
-    notification still leaves the chime played, and neither costs the
-    other channels.
+    trip and the osascript call. Playback and notification failures are
+    each warned and skipped so one channel's glitch never stops the
+    watcher: a failed notification still leaves the chime played, and
+    neither costs the other channels.
 
     The namer is sampled on *every* live snapshot and its names are consumed
     only on a rise, so the chat-roster diff spans exactly one poll interval.
@@ -53,40 +53,13 @@ async def monitor(
     whatever rise came next — the correlation the naming rests on.
     """
     chime_lock = asyncio.Lock()
-    roster = Roster(tuple(source.name for source in sources))
+    roster = Roster(tuple(source.target for source in sources))
 
     async def consume(source: StreamSource) -> None:
-        # Sampling runs every poll, and a broken namer breaks on every one of
-        # them, so warn only on the transition *into* failure; a successful
-        # sample re-arms it for the next distinct outage. Same shape as
-        # poll_snapshots' fetch warning, for the same reason: otherwise one
-        # permanently broken namer writes 12 lines a minute forever.
-        namer_warned = False
-
-        async def sample_arrivals(snapshot: StreamSnapshot) -> tuple[str, ...]:
-            """Advance the namer's roster by one poll, degrading to no names."""
-            nonlocal namer_warned
-            if namer is None or snapshot.stream_id is None:
-                return ()
-            # ArrivalNamer is a public protocol, so treat it like play/notify:
-            # a name is a nice-to-have and must never cost the notification or
-            # the chime.
-            try:
-                names = await namer.arrivals(snapshot.target, snapshot.stream_id)
-            except Exception as error:
-                if not namer_warned:
-                    _LOGGER.warning(
-                        "could not name arrivals for %s: %s", source.name, error
-                    )
-                    namer_warned = True
-                return ()
-            namer_warned = False
-            return names
-
         previous: StreamSnapshot | None = None
         try:
             async for snapshot in source.snapshots():
-                roster.update(source.name, snapshot.viewers)
+                roster.update(source.target, snapshot.viewers)
                 if snapshot.stream_id is None:
                     previous = None
                     continue
@@ -121,7 +94,14 @@ async def monitor(
                         rise = delta
                 # Sample every live poll, consume only on a rise: the diff
                 # window must be one poll interval, not "since the last rise".
-                names = await sample_arrivals(snapshot)
+                # The namer absorbs its own expected failures and answers with
+                # no names, so anything escaping it is a bug for the boundary
+                # handler below rather than something swallowed every poll.
+                names = (
+                    await namer.arrivals(snapshot.target, snapshot.stream_id)
+                    if namer is not None
+                    else ()
+                )
                 if rise is not None:
                     title = render_title(snapshot.target, rise, names)
                     try:

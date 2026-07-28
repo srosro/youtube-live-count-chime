@@ -10,22 +10,29 @@ YOUTUBE_A = StreamTarget(Platform.YOUTUBE, "srosrosr")
 
 class RosterTests(unittest.TestCase):
     def test_renders_every_channel_in_fixed_order_including_unchanged(self) -> None:
-        roster = Roster(("twitch:watchmepivot", "youtube:srosrosr"))
-        roster.update("youtube:srosrosr", 4)
-        roster.update("twitch:watchmepivot", 2)
+        roster = Roster((TWITCH_A, YOUTUBE_A))
+        roster.update(YOUTUBE_A, 4)
+        roster.update(TWITCH_A, 2)
 
         self.assertEqual(
             roster.render(), "twitch watchmepivot 2 · youtube srosrosr 4"
         )
 
-    def test_renders_offline_and_never_seen_channels_rather_than_omitting_them(
-        self,
-    ) -> None:
+    def test_an_unpolled_channel_is_rendered_apart_from_an_offline_one(self) -> None:
         # A fixed-shape body is the whole point: a channel never disappears.
-        roster = Roster(("twitch:a", "twitch:b"))
-        roster.update("twitch:a", None)
+        # But the first notification can fire before every channel's first poll
+        # has come back, and a channel nobody has looked at yet must not be
+        # reported offline.
+        live = StreamTarget(Platform.TWITCH, "live")
+        off = StreamTarget(Platform.TWITCH, "off")
+        unpolled = StreamTarget(Platform.YOUTUBE, "unpolled")
+        roster = Roster((live, off, unpolled))
+        roster.update(live, 3)
+        roster.update(off, None)
 
-        self.assertEqual(roster.render(), "twitch a offline · twitch b offline")
+        self.assertEqual(
+            roster.render(), "twitch live 3 · twitch off offline · youtube unpolled ?"
+        )
 
 
 class RenderTitleTests(unittest.TestCase):

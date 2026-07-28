@@ -64,6 +64,11 @@ class StreamTarget:
         """Return a stable identifier for this target."""
         return f"{self.platform}:{self.name}"
 
+    @property
+    def label(self) -> str:
+        """Return this target as displayed to a human, e.g. ``twitch mkbhd``."""
+        return f"{self.platform} {self.name}"
+
 
 @dataclass(frozen=True, slots=True)
 class StreamSnapshot:
@@ -92,20 +97,12 @@ class StreamSource(Protocol):
     def name(self) -> str:
         """Return a stable display name for this source."""
 
+    @property
+    def target(self) -> StreamTarget:
+        """Return the channel this source polls."""
+
     def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         """Yield successive stream snapshots."""
-
-
-class ArrivalNamer(Protocol):
-    """Names viewers who appeared on a target since the previous query.
-
-    Each query advances the window, so the monitor queries once per poll —
-    querying only when it wants names would widen the window to "since the
-    last time names were wanted".
-    """
-
-    async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
-        """Return handles that arrived, or ``()`` when none are knowable."""
 
 
 async def poll_snapshots(

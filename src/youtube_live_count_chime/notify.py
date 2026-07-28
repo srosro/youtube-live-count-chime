@@ -38,4 +38,10 @@ def post_notification(title: str, body: str) -> None:
             timeout=10.0,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        raise NotificationError(f"could not post notification: {error}") from error
+        # These exceptions render the whole argv, and the argv carries the
+        # notification text — an inferred chatter handle and every watched
+        # channel's count, which the LaunchAgent redirects into its log file.
+        # `from None` keeps a traceback from re-rendering what the message omits.
+        raise NotificationError(
+            f"could not post notification ({type(error).__name__})"
+        ) from None

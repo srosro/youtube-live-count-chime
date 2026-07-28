@@ -14,11 +14,13 @@ from youtube_live_count_chime.tokens import StoredToken
 
 UP = Path("/System/Library/Sounds/Glass.aiff")
 DOWN = Path("/System/Library/Sounds/Basso.aiff")
+TOKEN = StoredToken("chan", "42", "access-placeholder", "refresh-placeholder")
 
 
 class FakeSource:
-    def __init__(self, name: str, snaps: list[StreamSnapshot]) -> None:
-        self.name = name
+    def __init__(self, target: StreamTarget, snaps: list[StreamSnapshot]) -> None:
+        self.target = target
+        self.name = target.key
         self._snaps = snaps
 
     async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
@@ -27,11 +29,35 @@ class FakeSource:
 
 
 class ExplodingSource:
+    target = StreamTarget(Platform.TWITCH, "channel-x")
     name = "channel-x"
 
     async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
         raise RuntimeError("upstream failure")
         yield  # pragma: no cover - marks this an async generator
+
+
+class FakeStore:
+    """Every channel under test is authorized; the token itself is inert."""
+
+    def get(self, login: str) -> StoredToken | None:
+        return TOKEN
+
+
+class FakeChatters:
+    """Serve queued chat rosters, recording each read on a shared event log."""
+
+    def __init__(
+        self, rosters: list[frozenset[str]], events: list[str] | None = None
+    ) -> None:
+        self._rosters = rosters
+        self.events = events if events is not None else []
+        self.calls = 0
+
+    def chatters(self, token: StoredToken) -> frozenset[str]:
+        self.calls += 1
+        self.events.append("arrivals")
+        return self._rosters.pop(0) if self._rosters else frozenset()
 
 
 def live(target: StreamTarget, viewers: int) -> StreamSnapshot:
@@ -52,7 +78,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         snaps = [live(target, 5), live(target, 5), live(target, 9), live(target, 2)]
         played: list[Path] = []
         await monitor(
-            [FakeSource("youtube:a", snaps)],
+            [FakeSource(target, snaps)],
             ChimeConfig(UP, DOWN),
             play=played.append,
             notify=silent,
@@ -65,8 +91,8 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         played: list[Path] = []
         await monitor(
             [
-                FakeSource("youtube:a", [live(a, 1), live(a, 2)]),
-                FakeSource("twitch:b", [live(b, 100), live(b, 100)]),
+                FakeSource(a, [live(a, 1), live(a, 2)]),
+                FakeSource(b, [live(b, 100), live(b, 100)]),
             ],
             ChimeConfig(UP, DOWN),
             play=played.append,
@@ -79,7 +105,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         buffer = io.StringIO()
         with redirect_stdout(buffer):
             await monitor(
-                [FakeSource("youtube:chan", [live(a, 5), live(a, 9)])],
+                [FakeSource(a, [live(a, 5), live(a, 9)])],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
                 notify=silent,
@@ -94,7 +120,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         await monitor(
             [
                 FakeSource(
-                    "youtube:a",
+                    a,
                     [
                         live(a, 5),  # baseline
                         StreamSnapshot.offline(a),  # offline clears the baseline
@@ -122,7 +148,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         # completes normally. Two warnings pins that it kept going after the first.
         with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
             await monitor(
-                [FakeSource("youtube:a", [live(a, 1), live(a, 2), live(a, 3)])],
+                [FakeSource(a, [live(a, 1), live(a, 2), live(a, 3)])],
                 ChimeConfig(UP, DOWN),
                 play=boom,
                 notify=lambda title, body: None,
@@ -135,14 +161,14 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             await monitor(
                 [
                     ExplodingSource(),
-                    FakeSource("youtube:a", [live(healthy, 1), live(healthy, 4)]),
+                    FakeSource(healthy, [live(healthy, 1), live(healthy, 4)]),
                 ],
                 ChimeConfig(UP, DOWN),
                 play=lambda path: None,
                 notify=silent,
             )
         # Pin the full wrapper message and the preserved cause: this fails if
-        # the naming wrapper or its `from error` chaining is dropped.
+        # the channel-naming wrapper or its `from error` chaining is dropped.
         messages = [str(error) for error in ctx.exception.exceptions]
         self.assertIn("source channel-x failed", messages)
         causes = [type(error.__cause__) for error in ctx.exception.exceptions]
@@ -157,20 +183,16 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         # chime delays every chime behind I/O.
         a = StreamTarget(Platform.TWITCH, "chan")
         events: list[str] = []
-
-        class RecordingNamer:
-            async def arrivals(
-                self, target: StreamTarget, stream_id: str
-            ) -> tuple[str, ...]:
-                events.append("arrivals")
-                return ("joe_doe",)
+        client = FakeChatters(
+            [frozenset(), frozenset({"joe_doe"})], events
+        )
 
         await monitor(
-            [FakeSource("twitch:chan", [live(a, 1), live(a, 2)])],
+            [FakeSource(a, [live(a, 1), live(a, 2)])],
             ChimeConfig(UP, DOWN),
             play=lambda path: events.append("chime"),
             notify=lambda title, body: events.append("notify"),
-            namer=RecordingNamer(),
+            namer=TwitchChatterNamer(client, FakeStore()),
         )
 
         # The baseline poll samples the roster too (the diff window is one
@@ -182,17 +204,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         b = StreamTarget(Platform.YOUTUBE, "srosrosr")
         posted: list[tuple[str, str]] = []
 
-        class Namer:
-            """Names only the rising target's *current* stream, nothing else."""
-
-            def __init__(self) -> None:
-                self.asked: list[tuple[StreamTarget, str]] = []
-
-            async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
-                self.asked.append((target, stream_id))
-                return ("joe_doe",)
-
-        namer = Namer()
+        client = FakeChatters([frozenset(), frozenset({"joe_doe"})])
 
         # The other source (b) is present to exercise the multi-source shape
         # of Roster construction, but its own rendered count depends on
@@ -203,25 +215,23 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         # roster entry is always written before it notifies.
         await monitor(
             [
-                FakeSource("twitch:watchmepivot", [live(a, 1), live(a, 2)]),
-                FakeSource("youtube:srosrosr", [live(b, 7)]),
+                FakeSource(a, [live(a, 1), live(a, 2)]),
+                FakeSource(b, [live(b, 7)]),
             ],
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
             notify=lambda title, body: posted.append((title, body)),
-            namer=namer,
+            namer=TwitchChatterNamer(client, FakeStore()),
         )
 
         self.assertEqual(len(posted), 1)
         title, body = posted[0]
         self.assertEqual(title, "joe_doe is now watching twitch watchmepivot")
         self.assertIn("twitch watchmepivot 2", body)
-        # The rising source's own target and the snapshot's *current* stream id,
-        # once per live poll: passing the previous snapshot's id would re-seed
-        # the namer forever, and passing the other source's target would name
-        # the wrong channel. (The other source's samples interleave
-        # nondeterministically, so only this target's are pinned.)
-        self.assertEqual([ask for ask in namer.asked if ask[0] == a], [(a, "s1")] * 2)
+        # Once per live poll of the *Twitch* source, and never for the YouTube
+        # one: sampling only on a rise would widen the diff window, and naming
+        # the YouTube target from this roster would name the wrong channel.
+        self.assertEqual(client.calls, 2)
 
     async def test_a_fall_posts_no_notification_though_the_roster_is_still_sampled(
         self,
@@ -229,33 +239,25 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
 
-        class Namer:
-            def __init__(self) -> None:
-                self.calls = 0
-
-            async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
-                self.calls += 1
-                return ()
-
-        namer = Namer()
+        client = FakeChatters([])
         await monitor(
-            [FakeSource("twitch:chan", [live(a, 5), live(a, 2)])],
+            [FakeSource(a, [live(a, 5), live(a, 2)])],
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
             notify=lambda title, body: posted.append((title, body)),
-            namer=namer,
+            namer=TwitchChatterNamer(client, FakeStore()),
         )
 
         self.assertEqual(posted, [])
         # The roster is still sampled on the fall — that is what keeps the diff
         # window one poll wide — but a fall never names or notifies anyone.
-        self.assertEqual(namer.calls, 2)
+        self.assertEqual(client.calls, 2)
 
     async def test_rise_without_a_namer_falls_back_to_a_bare_count(self) -> None:
         a = StreamTarget(Platform.YOUTUBE, "chan")
         posted: list[tuple[str, str]] = []
         await monitor(
-            [FakeSource("youtube:chan", [live(a, 1), live(a, 3)])],
+            [FakeSource(a, [live(a, 1), live(a, 3)])],
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
             notify=lambda title, body: posted.append((title, body)),
@@ -272,35 +274,19 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         # ("watchmepivot") the namer would look up collides between the two
         # platforms. Naming is Twitch-only by design.
         youtube_target = StreamTarget(Platform.YOUTUBE, "watchmepivot")
-        token = StoredToken("watchmepivot", "42", "access", "refresh")
-
-        class _FakeStore:
-            def get(self, login: str) -> StoredToken | None:
-                return token
-
-        class _FakeClient:
-            def __init__(self) -> None:
-                self.calls = 0
-
-            def chatters(self, token: StoredToken) -> frozenset[str]:
-                self.calls += 1
-                return frozenset({"joe_doe"})
-
-        client = _FakeClient()
-        namer = TwitchChatterNamer(client, _FakeStore())
+        client = FakeChatters([frozenset({"joe_doe"})])
         posted: list[tuple[str, str]] = []
 
         await monitor(
             [
                 FakeSource(
-                    "youtube:watchmepivot",
-                    [live(youtube_target, 1), live(youtube_target, 2)],
+                    youtube_target, [live(youtube_target, 1), live(youtube_target, 2)]
                 )
             ],
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
             notify=lambda title, body: posted.append((title, body)),
-            namer=namer,
+            namer=TwitchChatterNamer(client, FakeStore()),
         )
 
         self.assertEqual(len(posted), 1)
@@ -318,7 +304,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         # The warning is the operator's only signal that banners are broken.
         with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
             await monitor(
-                [FakeSource("twitch:chan", [live(a, 1), live(a, 2), live(a, 5)])],
+                [FakeSource(a, [live(a, 1), live(a, 2), live(a, 5)])],
                 ChimeConfig(UP, DOWN),
                 play=played.append,
                 notify=explode,
@@ -327,37 +313,30 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(played, [UP, UP])  # both rises still chimed
         self.assertEqual(len(logs.records), 2)  # each failure warned
 
-    async def test_a_namer_failure_still_notifies_unnamed_and_keeps_watching(
-        self,
-    ) -> None:
-        # ArrivalNamer is a public protocol, so monitor must not trust it: a
-        # bug in someone's namer must cost the name, not the notification, the
-        # chime, or the other channels.
+    async def test_an_unnameable_rise_still_notifies_with_a_bare_count(self) -> None:
+        # The namer absorbs its own expected failures and answers with no
+        # names; the rise must still chime and still post a banner.
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
         played: list[Path] = []
 
-        class BuggyNamer:
-            async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
-                raise AttributeError("namer bug")
+        class _UnauthorizedStore:
+            def get(self, login: str) -> StoredToken | None:
+                return None
 
-        with self.assertLogs("youtube_live_count_chime.monitor", "WARNING") as logs:
-            await monitor(
-                [FakeSource("twitch:chan", [live(a, 1), live(a, 2), live(a, 5)])],
-                ChimeConfig(UP, DOWN),
-                play=played.append,
-                notify=lambda title, body: posted.append((title, body)),
-                namer=BuggyNamer(),
-            )
+        await monitor(
+            [FakeSource(a, [live(a, 1), live(a, 2), live(a, 5)])],
+            ChimeConfig(UP, DOWN),
+            play=played.append,
+            notify=lambda title, body: posted.append((title, body)),
+            namer=TwitchChatterNamer(FakeChatters([]), _UnauthorizedStore()),
+        )
 
-        self.assertEqual([title for title, _ in posted], [
-            "+1 watching twitch chan",
-            "+3 watching twitch chan",
-        ])
+        self.assertEqual(
+            [title for title, _ in posted],
+            ["+1 watching twitch chan", "+3 watching twitch chan"],
+        )
         self.assertEqual(played, [UP, UP])
-        # Sampling runs every poll, so warning per failure would be 12 lines a
-        # minute forever: the operator is told once per outage.
-        self.assertEqual(len(logs.records), 1)
 
     async def test_a_chatter_who_joined_on_a_flat_poll_is_not_named_on_the_next_rise(
         self,
@@ -369,11 +348,6 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         # see. Sampling only on rises would diff the second rise against the
         # *first* rise's roster and announce "joe_doe is now watching".
         a = StreamTarget(Platform.TWITCH, "chan")
-        token = StoredToken("chan", "42", "access-placeholder", "refresh-placeholder")
-
-        class _FakeStore:
-            def get(self, login: str) -> StoredToken | None:
-                return token
 
         class _Channel:
             """A source whose chat roster advances in lockstep with each poll.
@@ -383,6 +357,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             monitor chooses to ask — which is exactly what is under test.
             """
 
+            target = a
             name = "twitch:chan"
 
             def __init__(self, script: list[tuple[int, frozenset[str]]]) -> None:
@@ -414,7 +389,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
             notify=lambda title, body: posted.append((title, body)),
-            namer=TwitchChatterNamer(channel, _FakeStore()),
+            namer=TwitchChatterNamer(channel, FakeStore()),
         )
 
         self.assertEqual(

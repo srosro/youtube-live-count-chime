@@ -12,7 +12,7 @@ from typing import Final, Sequence, cast
 
 from youtube_live_count_chime.auth import AuthError, run_auth_flow
 from youtube_live_count_chime.chatters import ChatterClient, TwitchChatterNamer
-from youtube_live_count_chime.models import ArrivalNamer, StreamSource
+from youtube_live_count_chime.models import StreamSource
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
 from youtube_live_count_chime.tokens import TokenStore
 from youtube_live_count_chime.twitch import (
@@ -142,7 +142,7 @@ def build_sources(config: Config) -> list[StreamSource]:
     return sources
 
 
-def build_namer(sources: Sequence[StreamSource]) -> ArrivalNamer | None:
+def build_namer(sources: Sequence[StreamSource]) -> TwitchChatterNamer | None:
     """Build the chat-roster namer, or ``None`` when no Twitch channel is watched.
 
     Derived from the sources build_sources already produced, so the credentials

@@ -10,7 +10,8 @@ from unittest.mock import patch
 from youtube_live_count_chime.auth import AuthError
 from youtube_live_count_chime.cli import build_sources, main, parse_config
 from youtube_live_count_chime.monitor import ChimeConfig
-from youtube_live_count_chime.models import ArrivalNamer, StreamSource
+from youtube_live_count_chime.chatters import TwitchChatterNamer
+from youtube_live_count_chime.models import StreamSource
 from youtube_live_count_chime.tokens import StoredToken
 from youtube_live_count_chime.twitch import TwitchAuthError, TwitchSource
 
@@ -190,7 +191,7 @@ class MainTests(_CliTestCase):
             sources: Sequence[StreamSource],
             config: ChimeConfig,
             *,
-            namer: ArrivalNamer | None = None,
+            namer: TwitchChatterNamer | None = None,
         ) -> None:
             raise KeyboardInterrupt
 
@@ -202,7 +203,7 @@ class MainTests(_CliTestCase):
             sources: Sequence[StreamSource],
             config: ChimeConfig,
             *,
-            namer: ArrivalNamer | None = None,
+            namer: TwitchChatterNamer | None = None,
         ) -> None:
             raise RuntimeError("kaboom")
 
@@ -217,7 +218,7 @@ class MainTests(_CliTestCase):
             sources: Sequence[StreamSource],
             config: ChimeConfig,
             *,
-            namer: ArrivalNamer | None = None,
+            namer: TwitchChatterNamer | None = None,
         ) -> None:
             captured["names"] = [source.name for source in sources]
             captured["config"] = config

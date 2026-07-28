@@ -26,22 +26,33 @@ class PostNotificationTests(unittest.TestCase):
         self.assertEqual(command[-1], hostile)
         self.assertNotIn(hostile, " ".join(command[:-1]))
 
-    def test_failure_becomes_notification_error(self) -> None:
+    def test_failure_becomes_notification_error_without_the_notification_text(
+        self,
+    ) -> None:
         # TimeoutExpired is the observable half of the bounded-wait contract: a
         # wedged osascript (Notification Center hung, a stuck TCC prompt) ends
         # as a NotificationError the caller can warn on, never a blocked caller.
+        # The failure is warned into the LaunchAgent's log file, so it must not
+        # carry the argv: that is the inferred chatter handle and the counts of
+        # every watched channel.
+        argv = ["/usr/bin/osascript", "--", "twitch chan 4", "joe_doe is watching"]
         failures: tuple[Exception, ...] = (
-            subprocess.CalledProcessError(1, "osascript", stderr="boom"),
+            subprocess.CalledProcessError(1, argv, stderr="boom"),
             FileNotFoundError("osascript not found"),
-            subprocess.TimeoutExpired("osascript", 10.0),
+            subprocess.TimeoutExpired(argv, 10.0),
         )
         for failure in failures:
             with self.subTest(failure=type(failure).__name__):
                 with patch(
                     "youtube_live_count_chime.notify.subprocess.run", side_effect=failure
                 ):
-                    with self.assertRaises(NotificationError):
-                        post_notification("t", "b")
+                    with self.assertRaises(NotificationError) as ctx:
+                        post_notification("joe_doe is watching", "twitch chan 4")
+
+                rendered = f"{ctx.exception}{ctx.exception.__cause__}"
+                self.assertNotIn("joe_doe", rendered)
+                self.assertNotIn("twitch chan", rendered)
+                self.assertIn(type(failure).__name__, rendered)
 
 
 if __name__ == "__main__":

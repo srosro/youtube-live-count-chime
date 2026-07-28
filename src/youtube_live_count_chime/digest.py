@@ -14,11 +14,10 @@ from youtube_live_count_chime.models import StreamTarget
 MAX_NAMES: Final = 3
 
 _SEPARATOR: Final = " · "
-
-
-def _display(key: str) -> str:
-    """Turn a ``platform:handle`` key into ``platform handle`` for display."""
-    return key.replace(":", " ", 1)
+# A target polled but not yet seen live is not the same as one observed
+# offline, and must not claim to be: the first notification can fire before
+# every channel's first poll has come back.
+_UNPOLLED: Final = "?"
 
 
 @dataclass(slots=True)
@@ -29,20 +28,20 @@ class Roster:
     runtime, so the rendered body has the same shape on every notification.
     """
 
-    order: tuple[str, ...]
-    counts: dict[str, int | None] = field(default_factory=dict)
+    order: tuple[StreamTarget, ...]
+    counts: dict[StreamTarget, int | None] = field(default_factory=dict)
 
-    def update(self, key: str, viewers: int | None) -> None:
+    def update(self, target: StreamTarget, viewers: int | None) -> None:
         """Record a target's latest count (``None`` when offline)."""
-        self.counts[key] = viewers
+        self.counts[target] = viewers
 
     def render(self) -> str:
-        """Render every target, including unchanged, offline, and unseen ones."""
+        """Render every target, including unchanged, offline, and unpolled ones."""
         parts = []
-        for key in self.order:
-            viewers = self.counts.get(key)
+        for target in self.order:
+            viewers = self.counts.get(target, _UNPOLLED)
             shown = "offline" if viewers is None else str(viewers)
-            parts.append(f"{_display(key)} {shown}")
+            parts.append(f"{target.label} {shown}")
         return _SEPARATOR.join(parts)
 
 
@@ -54,7 +53,7 @@ def render_title(target: StreamTarget, delta: int, names: Sequence[str]) -> str:
     people arrived, so the title never names more than that many, and any
     arrival the roster could not name is carried by "and N more".
     """
-    where = _display(target.key)
+    where = target.label
     listed = tuple(names[: min(MAX_NAMES, delta)])
     if not listed:
         return f"+{delta} watching {where}"
