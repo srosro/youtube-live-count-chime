@@ -48,7 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Play macOS chimes when the live viewer count of YouTube or Twitch "
-            "channels rises or falls."
+            "channels rises or falls, and speak each rise out loud."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )

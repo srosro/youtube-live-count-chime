@@ -2,7 +2,8 @@
 
 A small, strictly typed macOS command-line watcher that monitors the live viewer
 count of multiple YouTube and Twitch channels at once and plays one sound when a
-count increases and a different sound when it decreases.
+count increases and a different sound when it decreases. A rise is also spoken
+out loud.
 
 ## Requirements
 
