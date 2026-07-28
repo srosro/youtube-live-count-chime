@@ -2,6 +2,7 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
+from youtube_live_count_chime.models import POLL_INTERVAL_SECONDS
 from youtube_live_count_chime.speech import SpeechError, speak_text
 
 
@@ -17,10 +18,12 @@ class SpeakTextTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command, ("/usr/bin/say", "--", hostile))
         self.assertNotIn("shell", run.call_args.kwargs)
-        # Bounded at all is the contract — speech is awaited while holding the
-        # audio lock every source shares, so an unbounded wedged `say` mutes
-        # the whole fleet forever. How long is tuning, and not pinned here.
-        self.assertIsNotNone(run.call_args.kwargs["timeout"])
+        # Both halves of the bound matter, and only one of them is loud.
+        # Unbounded, a wedged `say` mutes the whole fleet forever. Too tight,
+        # every announcement is SIGKILLed mid-sentence — and that failure is
+        # silent, since a truncated line still leaves the chime played and the
+        # banner posted. A floor, like the sibling bound on the same lock.
+        self.assertGreater(run.call_args.kwargs["timeout"], POLL_INTERVAL_SECONDS)
         self.assertIs(run.call_args.kwargs["check"], True)
 
     def test_failure_becomes_speech_error_without_the_spoken_text(self) -> None:

@@ -55,7 +55,11 @@ async def monitor(
     banner posted. They are not free to the other channels, though — the
     chime and the announcement are awaited under the audio lock every source
     shares, so a wedged one blocks every channel's audio until its bound
-    expires. Any other exception escaping a source is an unexpected bug: the
+    expires. Worst case both wedge in the same acquisition: ``sounds`` and
+    ``speech`` bound them separately, and their sum is how long the fleet can
+    go silent. That is deliberately far longer than a poll — the chime's bound
+    has to clear any ``--up-sound`` the operator points at, not just the
+    default — so it buys a recoverable stall instead of a permanent one. Any other exception escaping a source is an unexpected bug: the
     TaskGroup cancels the siblings and ``main`` reports it (named with the
     channel) and exits non-zero.
     """
