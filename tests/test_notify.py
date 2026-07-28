@@ -15,7 +15,6 @@ class PostNotificationTests(unittest.TestCase):
         # Body then title, positionally, after the argv separator.
         self.assertEqual(command[-3:], ("--", "a body", "a title"))
 
-    def test_shell_metacharacters_survive_verbatim_as_one_argument(self) -> None:
         # A chatter handle is third-party input. It must reach AppleScript as a
         # single opaque argv element, never as script text.
         hostile = '" & (do shell script "touch /tmp/pwned") & "'
@@ -23,7 +22,7 @@ class PostNotificationTests(unittest.TestCase):
             post_notification(hostile, "body")
 
         command = run.call_args.args[0]
-        self.assertEqual(command[-1], hostile)
+        self.assertEqual(command[-3:], ("--", "body", hostile))
         self.assertNotIn(hostile, " ".join(command[:-1]))
 
     def test_failure_becomes_notification_error_without_the_notification_text(

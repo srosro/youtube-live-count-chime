@@ -23,6 +23,14 @@ TARGET = StreamTarget(Platform.TWITCH, "watchmepivot")
 TOKEN = StoredToken("watchmepivot", "42", "access-placeholder", "refresh-placeholder")
 
 
+def _next_response(script: list[object]) -> object:
+    """Interpret one scripted get_json response: raise it, or return it."""
+    item = script.pop(0)
+    if isinstance(item, HTTPError):
+        raise item
+    return item
+
+
 class _FakeStore:
     def __init__(self, token: StoredToken | None) -> None:
         self._token = token
@@ -346,15 +354,10 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
                 {"access_token": "fresh-placeholder", "refresh_token": "rotated"},
             ]
 
-            def fake_get_json(request: object) -> object:
-                item = responses.pop(0)
-                if isinstance(item, HTTPError):
-                    raise item
-                return item
-
             namer = TwitchChatterNamer(client, _FakeStore(TOKEN))
             with patch(
-                "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
+                "youtube_live_count_chime.chatters.get_json",
+                side_effect=lambda request: _next_response(responses),
             ):
                 self.assertEqual(await namer.arrivals(TARGET, "stream-1"), ())
 
@@ -382,14 +385,9 @@ class ChatterClientTests(unittest.TestCase):
             {"data": [{"user_login": "joe_doe"}]},  # retried read
         ]
 
-        def fake_get_json(request: object) -> object:
-            item = responses.pop(0)
-            if isinstance(item, HTTPError):
-                raise item
-            return item
-
         with patch(
-            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
+            "youtube_live_count_chime.chatters.get_json",
+            side_effect=lambda request: _next_response(responses),
         ):
             self.assertEqual(client.chatters(TOKEN), frozenset({"joe_doe"}))
 
@@ -408,14 +406,9 @@ class ChatterClientTests(unittest.TestCase):
             self._http_error(401),  # the retry: still refused
         ]
 
-        def fake_get_json(request: object) -> object:
-            item = refused.pop(0)
-            if isinstance(item, HTTPError):
-                raise item
-            return item
-
         with patch(
-            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
+            "youtube_live_count_chime.chatters.get_json",
+            side_effect=lambda request: _next_response(refused),
         ):
             with self.assertLogs("youtube_live_count_chime.chatters", "ERROR") as logs:
                 with self.assertRaises(TwitchAuthError):
@@ -473,14 +466,9 @@ class ChatterClientTests(unittest.TestCase):
             {"access_token": "fresh-placeholder", "refresh_token": "rotated"},
         ]
 
-        def fake_get_json(request: object) -> object:
-            item = responses.pop(0)
-            if isinstance(item, HTTPError):
-                raise item
-            return item
-
         with patch(
-            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
+            "youtube_live_count_chime.chatters.get_json",
+            side_effect=lambda request: _next_response(responses),
         ):
             with self.assertLogs("youtube_live_count_chime.chatters", "ERROR") as logs:
                 with self.assertRaises(TokenStoreError):
@@ -508,14 +496,9 @@ class ChatterClientTests(unittest.TestCase):
         client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())
         responses: list[object] = [self._http_error(500)]
 
-        def fake_get_json(request: object) -> object:
-            item = responses.pop(0)
-            if isinstance(item, HTTPError):
-                raise item
-            return item
-
         with patch(
-            "youtube_live_count_chime.chatters.get_json", side_effect=fake_get_json
+            "youtube_live_count_chime.chatters.get_json",
+            side_effect=lambda request: _next_response(responses),
         ):
             with self.assertRaises(TwitchRequestError):
                 client.chatters(TOKEN)
