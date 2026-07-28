@@ -35,6 +35,10 @@ class Roster:
         """Record a target's latest count (``None`` when offline)."""
         self.counts[target] = viewers
 
+    def discard(self, target: StreamTarget) -> None:
+        """Forget a target's count after a failed poll: it is now unknown."""
+        self.counts.pop(target, None)
+
     def render(self) -> str:
         """Render every target, including unchanged, offline, and unpolled ones."""
         parts = []

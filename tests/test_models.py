@@ -82,12 +82,15 @@ class PollSnapshotsTests(unittest.IsolatedAsyncioTestCase):
             patch("youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock),
             self.assertLogs("youtube_live_count_chime", "WARNING") as logs,
         ):
-            seen: list[StreamSnapshot] = []
+            seen: list[StreamSnapshot | None] = []
             async for snapshot in poll_snapshots("youtube:a", fetch):
                 seen.append(snapshot)
-                if len(seen) == 2:  # both successes, so both outages are behind us
+                if seen.count(live) == 2:  # both outages are behind us
                     break
 
+        # Every failed poll is reported, not silently skipped: the consumer
+        # must learn the count is unknown rather than keep the stale one.
+        self.assertEqual(seen, [None, None, None, live, None, live])
         warnings = [record.getMessage() for record in logs.records]
         self.assertEqual(len(warnings), 2)
         self.assertIn("could not fetch youtube:a: first down", warnings[0])

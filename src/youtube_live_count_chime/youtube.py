@@ -138,6 +138,6 @@ class YouTubeSource:
             viewers=page.viewers,
         )
 
-    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         """Yield live snapshots, retrying page-fetch failures after each poll."""
         return poll_snapshots(self.name, self._snapshot)

@@ -101,14 +101,19 @@ class StreamSource(Protocol):
     def target(self) -> StreamTarget:
         """Return the channel this source polls."""
 
-    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
-        """Yield successive stream snapshots."""
+    def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
+        """Yield successive stream snapshots, or ``None`` for a failed poll."""
 
 
 async def poll_snapshots(
     name: str, fetch: Callable[[], StreamSnapshot]
-) -> AsyncIterator[StreamSnapshot]:
+) -> AsyncIterator[StreamSnapshot | None]:
     """Poll ``fetch`` forever, yielding snapshots and surviving fetch failures.
+
+    A failed poll yields ``None``: the channel's state is *unknown*, which is
+    not ``StreamSnapshot.offline()`` ("confirmed not streaming"). Skipping the
+    yield instead would leave the consumer holding a pre-outage count and a
+    pre-outage chat roster, and publishing both as current.
 
     An unreachable channel fails every poll, so warn only on the transition
     *into* failure; a successful poll re-arms it for the next distinct outage.
@@ -122,6 +127,7 @@ async def poll_snapshots(
                 # `name` already carries the platform, e.g. "youtube:mkbhd".
                 _LOGGER.warning("could not fetch %s: %s", name, error)
                 warned = True
+            yield None
         else:
             warned = False
             yield snapshot

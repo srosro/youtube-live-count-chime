@@ -1,6 +1,7 @@
+import asyncio
 import io
 import unittest
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -18,12 +19,16 @@ TOKEN = StoredToken("chan", "42", "access-placeholder", "refresh-placeholder")
 
 
 class FakeSource:
-    def __init__(self, target: StreamTarget, snaps: list[StreamSnapshot]) -> None:
+    """Replay scripted polls; a ``None`` entry is a poll whose fetch failed."""
+
+    def __init__(
+        self, target: StreamTarget, snaps: Sequence[StreamSnapshot | None]
+    ) -> None:
         self.target = target
         self.name = target.key
         self._snaps = snaps
 
-    async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         for snap in self._snaps:
             yield snap
 
@@ -32,7 +37,7 @@ class ExplodingSource:
     target = StreamTarget(Platform.TWITCH, "channel-x")
     name = "channel-x"
 
-    async def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         raise RuntimeError("upstream failure")
         yield  # pragma: no cover - marks this an async generator
 
@@ -337,6 +342,68 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             ["+1 watching twitch chan", "+3 watching twitch chan"],
         )
         self.assertEqual(played, [UP, UP])
+
+    async def test_a_failed_poll_leaves_no_stale_count_in_another_channels_digest(
+        self,
+    ) -> None:
+        # A failed poll means "unknown", which is neither "offline" nor "still
+        # 7": the rising channel's banner must not publish the blind channel's
+        # pre-outage count as though it were current.
+        rising = StreamTarget(Platform.YOUTUBE, "rising")
+        blind = StreamTarget(Platform.TWITCH, "blind")
+        posted: list[tuple[str, str]] = []
+        polled = asyncio.Event()
+
+        class _Blind(FakeSource):
+            async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
+                for snap in self._snaps:
+                    yield snap
+                polled.set()
+
+        class _Rising(FakeSource):
+            async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
+                yield self._snaps[0]
+                await polled.wait()  # order the rise after the failed poll
+                yield self._snaps[1]
+
+        await monitor(
+            [
+                _Rising(rising, [live(rising, 1), live(rising, 2)]),
+                _Blind(blind, [live(blind, 7), None]),
+            ],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: None,
+            notify=lambda title, body: posted.append((title, body)),
+        )
+
+        self.assertEqual(len(posted), 1)
+        self.assertIn("twitch blind ?", posted[0][1])
+
+    async def test_a_rise_after_a_recovered_outage_names_nobody_who_joined_during_it(
+        self,
+    ) -> None:
+        # While a poll is failing the watcher is blind, so the chat roster it
+        # last saw is a pre-outage sample. Diffing the first recovered read
+        # against it would announce joe_doe, who joined while nobody was
+        # looking, as an arrival on the recovery rise.
+        a = StreamTarget(Platform.TWITCH, "chan")
+        posted: list[tuple[str, str]] = []
+        played: list[Path] = []
+        client = FakeChatters(
+            [frozenset({"lurker"}), frozenset({"lurker", "joe_doe"})]
+        )
+
+        await monitor(
+            [FakeSource(a, [live(a, 1), None, live(a, 2)])],
+            ChimeConfig(UP, DOWN),
+            play=played.append,
+            notify=lambda title, body: posted.append((title, body)),
+            namer=TwitchChatterNamer(client, FakeStore()),
+        )
+
+        self.assertEqual([title for title, _ in posted], ["+1 watching twitch chan"])
+        # The chime baseline survives the outage, so 1 -> 2 still chimes once.
+        self.assertEqual(played, [UP])
 
     async def test_a_chatter_who_joined_on_a_flat_poll_is_not_named_on_the_next_rise(
         self,

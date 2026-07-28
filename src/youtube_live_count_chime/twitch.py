@@ -231,6 +231,6 @@ class TwitchSource:
         target = StreamTarget(Platform.TWITCH, normalize_handle(login))
         return cls(name=target.key, target=target, client=client)
 
-    def snapshots(self) -> AsyncIterator[StreamSnapshot]:
+    def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
         """Yield live/offline snapshots, retrying request failures after each poll."""
         return poll_snapshots(self.name, lambda: self.client.stream(self.target))

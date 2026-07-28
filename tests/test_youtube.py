@@ -163,6 +163,7 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
 
             snapshot = await anext(source.snapshots())
 
+        assert snapshot is not None
         fetcher.assert_called_once_with("https://www.youtube.com/@watchmepivot/live")
         self.assertEqual(snapshot.target.key, "youtube:watchmepivot")
         self.assertEqual(snapshot.stream_id, "afTqXQQhYrY")
@@ -192,8 +193,11 @@ class YouTubeSourceTests(unittest.IsolatedAsyncioTestCase):
             source = YouTubeSource.for_handle("@x")
 
             with self.assertLogs("youtube_live_count_chime", "WARNING"):
-                snapshot = await anext(source.snapshots())
+                polls = source.snapshots()
+                self.assertIsNone(await anext(polls))  # the failure is reported
+                snapshot = await anext(polls)
 
+        assert snapshot is not None
         self.assertEqual(fetcher.call_count, 2)
         self.assertEqual(snapshot.viewers, 7)
 

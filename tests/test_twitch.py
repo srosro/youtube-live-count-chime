@@ -274,6 +274,7 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
                 seen.append(snapshot)
                 if len(seen) == 2:
                     break
+        assert seen[0] is not None and seen[1] is not None
         self.assertEqual(seen[0].viewers, 10)
         self.assertIsNone(seen[1].viewers)
         self.assertEqual(source.target.name, "shroud")
@@ -292,9 +293,12 @@ class TwitchSourceTests(unittest.IsolatedAsyncioTestCase):
             patch("youtube_live_count_chime.models.asyncio.sleep", new_callable=AsyncMock),
         ):
             with self.assertLogs("youtube_live_count_chime", "WARNING"):
-                snapshot = await anext(source.snapshots())
+                polls = source.snapshots()
+                self.assertIsNone(await anext(polls))  # the failure is reported
+                snapshot = await anext(polls)
 
         # Yielding the second scripted outcome is the retry: the first raised.
+        assert snapshot is not None
         self.assertEqual(snapshot.viewers, 5)
 
     async def test_rejected_credentials_stop_the_source_instead_of_retrying(self) -> None:

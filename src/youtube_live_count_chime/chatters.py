@@ -216,6 +216,14 @@ class TwitchChatterNamer:
             _LOGGER.warning("%s for %s: %s", message, key, error)
         return ()
 
+    def invalidate(self, target: StreamTarget) -> None:
+        """Drop a channel's baseline after a failed poll, so the next read reseeds.
+
+        The watcher was blind for that interval, and diffing across it would
+        name everyone who joined while it could not see.
+        """
+        self._state.pop(target.key, None)
+
     async def arrivals(self, target: StreamTarget, stream_id: str) -> tuple[str, ...]:
         """Return newly-seen chatters, or ``()`` when a name cannot be known."""
         if target.platform is not Platform.TWITCH:
