@@ -29,6 +29,48 @@ class FakeSource:
             yield snap
 
 
+class LeadingSource(FakeSource):
+    """Replay every scripted poll, then release ``done`` for a follower.
+
+    Cross-task interleaving is otherwise unspecified, so a test that asserts
+    one channel's entry in another channel's notification has to order the
+    two polls explicitly.
+    """
+
+    def __init__(
+        self,
+        target: StreamTarget,
+        snaps: Sequence[StreamSnapshot | None],
+        done: asyncio.Event,
+    ) -> None:
+        super().__init__(target, snaps)
+        self._done = done
+
+    async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
+        for snap in self._snaps:
+            yield snap
+        self._done.set()
+
+
+class FollowingSource(FakeSource):
+    """Baseline first, then hold the remaining polls until ``after`` is set."""
+
+    def __init__(
+        self,
+        target: StreamTarget,
+        snaps: Sequence[StreamSnapshot | None],
+        after: asyncio.Event,
+    ) -> None:
+        super().__init__(target, snaps)
+        self._after = after
+
+    async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
+        yield self._snaps[0]
+        await self._after.wait()
+        for snap in self._snaps[1:]:
+            yield snap
+
+
 class ExplodingSource:
     target = StreamTarget(Platform.TWITCH, "channel-x")
 
@@ -45,7 +87,10 @@ def silent(title: str, body: str) -> None:
     """Swallow notifications in tests that assert only on chime behavior.
 
     monitor() defaults to the real osascript notifier, so a rise in a test
-    that does not inject one posts an actual banner (and fails off macOS).
+    that does not inject one posts an actual banner on macOS. Off macOS it
+    is worse than a failure: the OSError becomes a NotificationError, which
+    monitor downgrades to a warning, so the only symptom is a stray WARNING
+    record breaking some other test's log-count assertion.
     """
 
 
@@ -201,24 +246,24 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events, ["chime", "notify"])
 
-    async def test_a_rise_notifies_with_the_delta_and_its_own_current_count(
+    async def test_a_rise_notifies_with_the_delta_and_the_whole_roster(
         self,
     ) -> None:
+        # The body is the digest of *every* watched channel, in source order —
+        # not just the one that moved. Ordering b's poll ahead of a's rise
+        # removes the cross-task scheduling nondeterminism, so the whole body
+        # can be pinned exactly; a substring check on the rising channel would
+        # also pass against a body that dropped b entirely, or that rendered
+        # the count as 30.
         a = StreamTarget(Platform.TWITCH, "watchmepivot")
         b = StreamTarget(Platform.YOUTUBE, "srosrosr")
         posted: list[tuple[str, str]] = []
+        polled = asyncio.Event()
 
-        # The other source (b) is present to exercise the multi-source shape
-        # of the digest, but its own rendered count depends on cross-task
-        # scheduling order, which monitor() does not guarantee — that
-        # full-roster rendering (fixed order, unchanged/offline entries) is
-        # exhaustively covered directly against render_roster in test_digest.py.
-        # Only the rising channel's own count is deterministic here: its
-        # roster entry is always written before it notifies.
         await monitor(
             [
-                FakeSource(a, [live(a, 1), live(a, 3)]),
-                FakeSource(b, [live(b, 7)]),
+                FollowingSource(a, [live(a, 1), live(a, 3)], polled),
+                LeadingSource(b, [live(b, 7)], polled),
             ],
             ChimeConfig(UP, DOWN),
             play=lambda path: None,
@@ -228,7 +273,7 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(posted), 1)
         title, body = posted[0]
         self.assertEqual(title, "+2 watching twitch watchmepivot")
-        self.assertIn("twitch watchmepivot 3", body)
+        self.assertEqual(body, "twitch watchmepivot 3 · youtube srosrosr 7")
 
     async def test_a_fall_chimes_but_posts_no_notification(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
@@ -264,41 +309,50 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(played, [UP, UP])  # both rises still chimed
         self.assertEqual(len(logs.records), 2)  # each failure warned
 
-    async def test_a_failed_poll_leaves_no_stale_count_in_another_channels_digest(
+    async def test_the_digest_tells_a_failed_poll_apart_from_a_confirmed_offline(
         self,
     ) -> None:
-        # A failed poll means "unknown", which is neither "offline" nor "still
-        # 7": the rising channel's banner must not publish the blind channel's
-        # pre-outage count as though it were current.
+        # The three roster states must all survive the trip through monitor. A
+        # failed poll means "unknown", which is neither "offline" nor "still
+        # 7", so the rising channel's banner must not publish the blind
+        # channel's pre-outage count as though it were current. And `offline`
+        # is only reachable because the roster is written before the offline
+        # branch returns: moving that write below it degrades every observed
+        # offline channel to `?`.
         rising = StreamTarget(Platform.YOUTUBE, "rising")
         blind = StreamTarget(Platform.TWITCH, "blind")
+        ended = StreamTarget(Platform.TWITCH, "ended")
         posted: list[tuple[str, str]] = []
-        polled = asyncio.Event()
+        blind_polled = asyncio.Event()
+        ended_polled = asyncio.Event()
+        both_polled = asyncio.Event()
 
-        class _Blind(FakeSource):
-            async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
-                for snap in self._snaps:
-                    yield snap
-                polled.set()
+        async def release_the_rise() -> None:
+            """Hold the rise until both other channels have reported."""
+            await blind_polled.wait()
+            await ended_polled.wait()
+            both_polled.set()
 
-        class _Rising(FakeSource):
-            async def snapshots(self) -> AsyncIterator[StreamSnapshot | None]:
-                yield self._snaps[0]
-                await polled.wait()  # order the rise after the failed poll
-                yield self._snaps[1]
-
-        await monitor(
-            [
-                _Rising(rising, [live(rising, 1), live(rising, 2)]),
-                _Blind(blind, [live(blind, 7), None]),
-            ],
-            ChimeConfig(UP, DOWN),
-            play=lambda path: None,
-            notify=lambda title, body: posted.append((title, body)),
+        await asyncio.gather(
+            monitor(
+                [
+                    FollowingSource(
+                        rising, [live(rising, 1), live(rising, 2)], both_polled
+                    ),
+                    LeadingSource(blind, [live(blind, 7), None], blind_polled),
+                    LeadingSource(ended, [StreamSnapshot.offline(ended)], ended_polled),
+                ],
+                ChimeConfig(UP, DOWN),
+                play=lambda path: None,
+                notify=lambda title, body: posted.append((title, body)),
+            ),
+            release_the_rise(),
         )
 
         self.assertEqual(len(posted), 1)
-        self.assertIn("twitch blind ?", posted[0][1])
+        body = posted[0][1]
+        self.assertIn("twitch blind ?", body)
+        self.assertIn("twitch ended offline", body)
 
 
 if __name__ == "__main__":

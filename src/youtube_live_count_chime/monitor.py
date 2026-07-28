@@ -76,8 +76,9 @@ async def monitor(
                 ):
                     assert previous.viewers is not None
                     delta = snapshot.viewers - previous.viewers
-                    direction = "up" if delta > 0 else "down"
-                    sound = config.up_sound if delta > 0 else config.down_sound
+                    rising = delta > 0
+                    direction = "up" if rising else "down"
+                    sound = config.up_sound if rising else config.down_sound
                     print(
                         f"{source.target.key}: {previous.viewers} -> {snapshot.viewers} "
                         f"({direction})",
@@ -94,8 +95,8 @@ async def monitor(
                             _LOGGER.warning(
                                 "could not play chime for %s: %s", source.target.key, error
                             )
-                    if delta > 0:
-                        title = render_title(snapshot.target, delta)
+                    if rising:
+                        title = render_title(source.target, delta)
                         try:
                             await asyncio.to_thread(
                                 notify, title, render_roster(order, counts)

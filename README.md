@@ -122,10 +122,12 @@ body is a digest of every channel being watched, always in the same order:
 twitch watchmepivot 3 · youtube srosrosr 4 · twitch offchannel offline
 ```
 
-The digest is fixed-shape, so a channel never disappears from it: a channel
-observed not streaming reads `offline`, and one that has not been polled yet —
-or whose last poll failed — reads `?` rather than a stale number. A fall chimes
-but posts no notification.
+The digest is fixed-shape, so a channel never disappears from it: a channel that
+has not been polled yet — or whose last poll failed — reads `?` rather than a
+stale number. `offline` is reachable only where the platform says so, which
+today means Twitch; a YouTube channel that isn't live is indistinguishable from
+a failed poll and also reads `?` (see [Limitations](#limitations)). A fall
+chimes but posts no notification.
 
 Notifications go through `osascript`, so the first rise may prompt for
 notification permission. If the banner cannot be posted the watcher logs a
