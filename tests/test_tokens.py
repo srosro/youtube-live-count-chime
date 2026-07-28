@@ -36,13 +36,18 @@ class TokenStoreTests(unittest.TestCase):
 
     def test_two_accounts_coexist(self) -> None:
         # The whole reason the store is keyed by login: one token per account.
+        # Saving B must not rewrite A's file at all, which is what makes
+        # concurrent saves from different processes safe.
         store = TokenStore(self.directory)
         store.save(_token("watchmepivot"))
+        before = self._file("watchmepivot").read_bytes()
+
         store.save(_token("samtriestobuild"))
 
         reloaded = TokenStore(self.directory)
         self.assertIsNotNone(reloaded.get("watchmepivot"))
         self.assertIsNotNone(reloaded.get("samtriestobuild"))
+        self.assertEqual(self._file("watchmepivot").read_bytes(), before)
 
     def test_a_login_is_looked_up_and_stored_under_its_normalized_form(self) -> None:
         # The file name is derived from the login, so a mixed-case or @-prefixed
@@ -124,27 +129,30 @@ class TokenStoreTests(unittest.TestCase):
         with patch(
             "youtube_live_count_chime.tokens.json.dump", side_effect=OSError("disk full")
         ):
-            with self.assertRaises(TokenStoreError):
-                store.save(StoredToken("watchmepivot", "id-rotated", "a2", "r2"))
+            with self.subTest("rotation"):
+                with self.assertRaises(TokenStoreError):
+                    store.save(StoredToken("watchmepivot", "id-rotated", "a2", "r2"))
 
-        restored = TokenStore(self.directory).get("watchmepivot")
-        assert restored is not None
-        self.assertEqual(restored.user_id, "id-watchmepivot")
-        # And no half-written temp file is left behind next to the tokens.
+                restored = TokenStore(self.directory).get("watchmepivot")
+                assert restored is not None
+                self.assertEqual(restored.user_id, "id-watchmepivot")
+
+            with self.subTest("never-authorized"):
+                # A failed save for a login with no file yet must leave that
+                # login reading back as None (not authorized, run --auth), not
+                # raise TokenStoreError. An implementation that opened the
+                # destination path directly would leave a zero-length file
+                # there, flipping one into the other.
+                with self.assertRaises(TokenStoreError):
+                    TokenStore(self.directory).save(_token("samtriestobuild"))
+
+                self.assertIsNone(TokenStore(self.directory).get("samtriestobuild"))
+
+        # And no half-written temp file or zero-length leftover is left
+        # behind next to the pre-existing account's file.
         self.assertEqual(
             sorted(p.name for p in self.directory.iterdir()), ["watchmepivot.json"]
         )
-
-    def test_saving_one_account_leaves_another_accounts_file_untouched(self) -> None:
-        # What one file per login owes: authorizing B must not rewrite A's file
-        # at all, so the two can never lose each other's update.
-        store = TokenStore(self.directory)
-        store.save(_token("watchmepivot"))
-        before = self._file("watchmepivot").read_bytes()
-
-        store.save(_token("samtriestobuild"))
-
-        self.assertEqual(self._file("watchmepivot").read_bytes(), before)
 
     def test_an_unwritable_location_fails_as_a_store_error_not_a_bare_oserror(
         self,
