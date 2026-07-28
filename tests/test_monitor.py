@@ -163,18 +163,25 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         # a leading one arrives before any baseline exists.
         a = StreamTarget(Platform.TWITCH, "chan")
         played: list[Path] = []
-        await monitor(
-            [
-                FakeSource(
-                    a,
-                    [None, None, live(a, 10), None, None, live(a, 500), live(a, 502)],
-                )
-            ],
-            ChimeConfig(UP, DOWN),
-            play=played.append,
-            notify=silent,
-        )
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            await monitor(
+                [
+                    FakeSource(
+                        a,
+                        [None, None, live(a, 10), None, None, live(a, 500), live(a, 502)],
+                    )
+                ],
+                ChimeConfig(UP, DOWN),
+                play=played.append,
+                notify=silent,
+            )
+        # Pin *which* rise chimed, not just how many: swallowing the genuine
+        # 500 -> 502 while chiming the gap-spanning 10 -> 500 is the exact
+        # inversion this test forbids, and a bare count cannot tell them apart.
         self.assertEqual(played, [UP])
+        self.assertIn("twitch:chan: 500 -> 502 (up)", buffer.getvalue())
+        self.assertNotIn("-> 500", buffer.getvalue())
 
 
 class NotificationTests(unittest.IsolatedAsyncioTestCase):

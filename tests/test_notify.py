@@ -6,7 +6,7 @@ from youtube_live_count_chime.notify import NotificationError, post_notification
 
 
 class PostNotificationTests(unittest.TestCase):
-    def test_passes_text_as_argv_after_a_separator(self) -> None:
+    def test_runs_osascript_bounded_and_checked_with_text_as_argv(self) -> None:
         with patch("youtube_live_count_chime.notify.subprocess.run") as run:
             post_notification("a title", "a body")
 
@@ -18,7 +18,10 @@ class PostNotificationTests(unittest.TestCase):
         # without them a wedged Notification Center blocks the calling thread
         # forever and a non-zero exit becomes a silent no-op, both with the
         # rest of this suite still green.
-        self.assertEqual(run.call_args.kwargs["timeout"], 10.0)
+        # Bounded, not a specific bound: the value is a tuning knob, but
+        # `timeout=None` (or no timeout at all) is the regression.
+        timeout = run.call_args.kwargs["timeout"]
+        self.assertTrue(0 < timeout <= 60, timeout)
         self.assertIs(run.call_args.kwargs["check"], True)
 
         # Notification text is not ours to trust. It must reach AppleScript as
