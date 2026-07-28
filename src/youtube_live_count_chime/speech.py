@@ -5,10 +5,18 @@ from __future__ import annotations
 import subprocess
 from typing import Final
 
-from youtube_live_count_chime.models import POLL_INTERVAL_SECONDS
-
 
 _SAY: Final = "/usr/bin/say"
+
+# A real announcement measures ~3.6s, so the bound has to clear that
+# comfortably or every rise would be cut off mid-sentence instead of spoken;
+# 6s leaves room for a long handle. It is deliberately tighter than a naive
+# "twice the poll interval" (10s): this call is awaited while holding the
+# audio lock that *every* source shares, so a wedged `say` mutes and stalls
+# the whole fleet — not one channel — for the full timeout. That cost is
+# fleet-wide, so it is bought in seconds over the measured line, not in
+# multiples of the loop's cadence.
+_TIMEOUT_SECONDS: Final = 6.0
 
 
 class SpeechError(RuntimeError):
@@ -26,13 +34,7 @@ def speak_text(text: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            # A real announcement measures ~3.6s, so the bound has to clear
-            # that comfortably or every rise would be cut off mid-sentence
-            # instead of spoken. Two poll intervals is the smallest multiple
-            # of the loop's own cadence that does: it leaves ample headroom
-            # over a real line while still capping a wedged `say` at a couple
-            # of polls for that one channel.
-            timeout=2 * POLL_INTERVAL_SECONDS,
+            timeout=_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # These exceptions render the whole argv, and the argv is the spoken

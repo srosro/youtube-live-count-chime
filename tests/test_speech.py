@@ -19,13 +19,13 @@ class SpeakTextTests(unittest.TestCase):
         self.assertEqual(command, ("/usr/bin/say", "--", hostile))
         self.assertNotIn("shell", run.call_args.kwargs)
         # Bounded by the constraint rather than its current tuning: speech is
-        # awaited inside the consumer's poll loop while holding the audio lock,
-        # so the timeout is how long a wedged `say` can stall that channel. It
-        # must clear a real ~3.6s announcement and still cap the stall at a
-        # couple of polls.
+        # awaited while holding the audio lock every source shares, so the
+        # timeout is how long a wedged `say` mutes and stalls the whole fleet,
+        # not one channel. It must clear a real ~3.6s announcement and stay
+        # well under the naive "twice the poll interval" that cost rules out.
         timeout = run.call_args.kwargs["timeout"]
         self.assertGreater(timeout, 3.6)
-        self.assertLessEqual(timeout, 2 * POLL_INTERVAL_SECONDS)
+        self.assertLess(timeout, 2 * POLL_INTERVAL_SECONDS)
         self.assertIs(run.call_args.kwargs["check"], True)
 
     def test_failure_becomes_speech_error_without_the_spoken_text(self) -> None:
