@@ -1,5 +1,6 @@
 import asyncio
 import io
+import time
 import unittest
 from collections.abc import AsyncIterator, Sequence
 from contextlib import redirect_stdout
@@ -229,21 +230,32 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NotificationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_the_chime_plays_before_notifying(self) -> None:
-        # The chime is the pre-existing signal and owes nothing to the network.
-        # The banner costs a real (~0.13s) osascript call, so ordering it
-        # before the chime delays every chime behind I/O.
+    async def test_each_rise_chimes_then_posts_before_the_next_is_polled(self) -> None:
+        # Two contracts in one interleaving. The chime is the pre-existing
+        # signal and owes nothing to the network, so it precedes the banner's
+        # real (~0.13s) osascript call. And delivery is awaited inline, so a
+        # channel's banners stay ordered and each title/body pair describes
+        # one moment — two rises must not collapse or overlap. Detaching the
+        # send passes a single-rise version of this test, because the
+        # TaskGroup joins the sender before monitor() returns.
         a = StreamTarget(Platform.TWITCH, "chan")
         events: list[str] = []
 
+        def slow_notify(title: str, body: str) -> None:
+            # Real osascript takes ~0.13s. A send that is merely scheduled
+            # rather than awaited finishes after the next poll's chime, so
+            # the interleaving below is what distinguishes the two designs.
+            time.sleep(0.05)
+            events.append("notify")
+
         await monitor(
-            [FakeSource(a, [live(a, 1), live(a, 2)])],
+            [FakeSource(a, [live(a, 1), live(a, 2), live(a, 3)])],
             ChimeConfig(UP, DOWN),
             play=lambda path: events.append("chime"),
-            notify=lambda title, body: events.append("notify"),
+            notify=slow_notify,
         )
 
-        self.assertEqual(events, ["chime", "notify"])
+        self.assertEqual(events, ["chime", "notify", "chime", "notify"])
 
     async def test_a_fall_chimes_but_posts_no_notification(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
