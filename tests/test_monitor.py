@@ -382,13 +382,14 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_recovery_from_an_outage_re_baselines_rather_than_spanning_it(
         self,
     ) -> None:
-        # While a poll is failing the watcher is blind, so both the count and
-        # the chat roster it last saw are pre-outage samples. Keeping the count
-        # would chime and announce "+490 watching" on the first read back — a
-        # delta measured across an unbounded gap. Keeping the roster would
-        # announce joe_doe, who joined while nobody was looking. The recovery
-        # poll re-baselines silently instead; only the genuine 500 -> 502 rise
-        # after it chimes, and it names nobody from the gap.
+        # While a poll is failing the watcher is blind, so the count it last saw
+        # is a pre-outage sample. Keeping it would chime and announce "+490
+        # watching" on the first read back — a delta measured across an
+        # unbounded gap — and joe_doe, who joined while nobody was looking,
+        # would be named on it. Clearing the baseline makes the recovery poll
+        # re-baseline silently instead: it cannot be a rise, so it neither
+        # chimes nor names. Only the genuine 500 -> 502 rise after it chimes,
+        # and by then the gap's arrivals are already in the reseeded roster.
         a = StreamTarget(Platform.TWITCH, "chan")
         posted: list[tuple[str, str]] = []
         played: list[Path] = []

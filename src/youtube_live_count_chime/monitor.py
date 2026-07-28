@@ -60,15 +60,16 @@ async def monitor(
         try:
             async for snapshot in source.snapshots():
                 if snapshot is None:
-                    # A failed poll: unknown, not offline. The count, roster and
-                    # chime baseline are all pre-outage samples — keeping them
-                    # publishes a stale digest number, names someone who joined
-                    # while we were blind, or chimes a gap-wide delta. Recovery
-                    # re-baselines silently, at one lost chime per failed poll.
+                    # A failed poll: unknown, not offline. Both the digest count
+                    # and the chime baseline are pre-outage samples. Drop the
+                    # count so the digest publishes no stale number, and clear
+                    # the baseline so the first poll back cannot be a rise —
+                    # which is what keeps recovery from chiming a gap-wide delta
+                    # or naming someone who joined while we were blind, since
+                    # names are consumed only on a rise. Recovery re-baselines
+                    # silently, at one lost chime per failed poll.
                     roster.discard(source.target)
                     previous = None
-                    if namer is not None:
-                        namer.invalidate(source.target)
                     continue
                 roster.update(source.target, snapshot.viewers)
                 if snapshot.stream_id is None:
