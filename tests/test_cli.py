@@ -12,7 +12,7 @@ from youtube_live_count_chime.cli import build_sources, main, parse_config
 from youtube_live_count_chime.monitor import ChimeConfig
 from youtube_live_count_chime.chatters import TwitchChatterNamer
 from youtube_live_count_chime.models import StreamSource
-from youtube_live_count_chime.tokens import StoredToken
+from youtube_live_count_chime.tokens import StoredToken, TokenStoreError
 from youtube_live_count_chime.twitch import TwitchAuthError, TwitchSource
 
 
@@ -287,6 +287,30 @@ class AuthFlagTests(_CliTestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertIn("Error: authorization was refused", stderr.getvalue())
+
+    def test_unwritable_token_store_prints_clean_message_and_exits_2(self) -> None:
+        # store.save() (the last step of run_auth_flow) can raise TokenStoreError
+        # on an unwritable ~/.config, ENOSPC, or a parent path occupied by a
+        # file. That must produce the same clean shape as every other failure
+        # here, not an uncaught traceback.
+        def fake_run_auth_flow(
+            login: str, credentials: object, store: object, **kwargs: object
+        ) -> StoredToken:
+            raise TokenStoreError("could not write /tokens.json: not a directory")
+
+        env = {"TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret"}
+        stderr = StringIO()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("youtube_live_count_chime.cli.run_auth_flow", fake_run_auth_flow),
+            redirect_stderr(stderr),
+        ):
+            exit_code = main(self.argv("--auth", "watchmepivot"))
+
+        self.assertEqual(exit_code, 2)
+        output = stderr.getvalue()
+        self.assertTrue(output.startswith("Error: "))
+        self.assertNotIn("Traceback", output)
 
     def test_malformed_auth_handle_exits_cleanly(self) -> None:
         # normalize_handle (called inside run_auth_flow, before it opens a
