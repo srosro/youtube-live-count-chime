@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from contextlib import redirect_stdout
 import io
 from pathlib import Path
@@ -119,6 +120,7 @@ class _FakeCallbackServer:
         self._events = list(events)
         self.timeout = 0.0
         self.timeouts: list[float] = []
+        self.last_response: io.BytesIO | None = None
 
     def __enter__(self) -> "_FakeCallbackServer":
         return self
@@ -134,6 +136,7 @@ class _FakeCallbackServer:
         handler = _CallbackHandler.__new__(_CallbackHandler)
         handler.path = event
         handler.wfile = io.BytesIO()
+        self.last_response = handler.wfile
         with (
             patch.object(_CallbackHandler, "send_response", lambda self, code: None),
             patch.object(
@@ -160,6 +163,7 @@ class RunAuthFlowTests(unittest.TestCase):
         login: str = "WatchMePivot",
         identified: tuple[str, str] = ("watchmepivot", "42"),
         bind_error: OSError | None = None,
+        open_browser: Callable[[str], bool] | None = None,
     ) -> StoredToken:
         """Run the flow with the network, the browser, and the server faked."""
         http_server = (
@@ -180,7 +184,10 @@ class RunAuthFlowTests(unittest.TestCase):
             patch("youtube_live_count_chime.auth._identify", return_value=identified),
         ):
             return run_auth_flow(
-                login, CREDENTIALS, self.store, open_browser=lambda url: True
+                login,
+                CREDENTIALS,
+                self.store,
+                open_browser=open_browser if open_browser is not None else lambda url: True,
             )
 
     def test_normalizes_a_mixed_case_login_before_comparing_and_storing(self) -> None:
@@ -193,6 +200,25 @@ class RunAuthFlowTests(unittest.TestCase):
         stored = self.store.get("watchmepivot")
         assert stored is not None
         self.assertEqual(stored.access_token, "access-tok")
+
+    def test_the_browser_reply_is_neutral_for_a_success_or_a_refusal(self) -> None:
+        # A state-valid ?error=access_denied ends the wait exactly like a
+        # genuine code callback, so the reply the browser renders must not
+        # say "Authorized" — that would tell the browser it succeeded while
+        # the terminal reports a refusal.
+        server = _FakeCallbackServer(CALLBACK)
+        self._run_flow(server)
+        assert server.last_response is not None
+        succeeded = server.last_response.getvalue()
+        self.assertNotIn(b"Authorized", succeeded)
+
+        refused_server = _FakeCallbackServer("/?error=access_denied&state=fixed-state")
+        with self.assertRaises(AuthError):
+            self._run_flow(refused_server)
+        assert refused_server.last_response is not None
+        refused = refused_server.last_response.getvalue()
+        self.assertNotIn(b"Authorized", refused)
+        self.assertEqual(refused, succeeded)
 
     def test_authorizing_as_the_wrong_account_fails_and_stores_nothing(self) -> None:
         # The easy two-account mistake: the browser was signed in as the other
@@ -256,18 +282,30 @@ class RunAuthFlowTests(unittest.TestCase):
     def test_a_port_already_in_use_fails_before_authorization_begins(self) -> None:
         # The listener must own the redirect port before the browser is sent to
         # Twitch, or a local process holding 8419 in that window receives the
-        # one-time code. So nothing is printed and no browser opens: the bind
-        # failure — the user's whole diagnosis — precedes any consent.
+        # one-time code. Both prints sit above open_browser(url) in the
+        # source, so an empty stdout is only a proxy for that — it would stay
+        # empty even if a regression hoisted open_browser(url) above the
+        # HTTPServer(...) construction. Assert directly that the browser was
+        # never opened: that's the actual security invariant.
         out = io.StringIO()
+        opened: list[str] = []
+
+        def record(url: str) -> bool:
+            opened.append(url)
+            return True
+
         with redirect_stdout(out):
             with self.assertRaisesRegex(
                 AuthError, f"could not bind to port {REDIRECT_PORT}"
             ):
                 self._run_flow(
-                    _FakeCallbackServer(CALLBACK), bind_error=OSError("address in use")
+                    _FakeCallbackServer(CALLBACK),
+                    bind_error=OSError("address in use"),
+                    open_browser=record,
                 )
 
         self.assertEqual(out.getvalue(), "")
+        self.assertEqual(opened, [])
 
     def test_a_later_flow_still_reports_its_own_stale_tab(self) -> None:
         # The stale-consent-tab notice is armed per flow. A regression dropping
