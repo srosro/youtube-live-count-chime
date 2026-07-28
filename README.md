@@ -136,8 +136,9 @@ notifications degrade to `+N watching youtube <handle>`.
    .venv/bin/youtube-live-count-chime --auth samtriestobuild
    ```
 
-   Each run opens a browser once. Tokens are stored in
-   `~/.config/count-chime/tokens.json` at mode `0600` and refresh automatically.
+   Each run opens a browser once. Each account's token is stored in its own
+   file, `~/.config/count-chime/tokens/<login>.json` at mode `0600` inside a
+   `0700` directory, and refreshes automatically.
 
 Channels without a stored token still notify — just without a name.
 

@@ -8,17 +8,18 @@ from json import JSONDecodeError
 import os
 from pathlib import Path
 import tempfile
-import threading
 from typing import Final, cast
 
+from youtube_live_count_chime.models import normalize_handle
 
-DEFAULT_PATH: Final = Path.home() / ".config" / "count-chime" / "tokens.json"
+
+DEFAULT_DIR: Final = Path.home() / ".config" / "count-chime" / "tokens"
 
 _FIELDS: Final = ("login", "user_id", "access_token", "refresh_token")
 
 
 class TokenStoreError(RuntimeError):
-    """Raised when the token file cannot be read or written.
+    """Raised when a token file cannot be read or written.
 
     Every store failure wears this type, reads and writes alike: callers absorb
     it as a degradation, and a bare OSError escaping a write (an unwritable
@@ -29,7 +30,7 @@ class TokenStoreError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class StoredToken:
-    """One Twitch account's user token, keyed in the store by login."""
+    """One Twitch account's user token, stored in a file named for its login."""
 
     login: str
     user_id: str
@@ -38,81 +39,72 @@ class StoredToken:
 
 
 class TokenStore:
-    """A JSON file of user tokens, keyed by Twitch login, readable only by us."""
+    """One owner-only JSON file per Twitch login, in an owner-only directory."""
 
-    __slots__ = ("path", "_lock")
+    __slots__ = ("directory",)
 
-    def __init__(self, path: Path = DEFAULT_PATH) -> None:
-        self.path = path
-        # save() is a read-modify-write, and every watched channel refreshes
-        # its own token through this one store from its own to_thread worker.
-        # Without the lock two concurrent rotations interleave load-load-
-        # write-write and one account's new token is lost. The lock is
-        # per-instance and in-process only: it serializes the watcher's own
-        # threads, not a second process (a concurrent `--auth` in another
-        # terminal), which can still overwrite a token this process just
-        # rotated. os.replace keeps that a lost update, never a corrupt store,
-        # and re-running `--auth` recovers it.
-        self._lock = threading.Lock()
+    def __init__(self, directory: Path = DEFAULT_DIR) -> None:
+        self.directory = directory
 
-    def _load(self) -> dict[str, StoredToken]:
-        if not self.path.is_file():
-            return {}
-        try:
-            raw = cast(object, json.loads(self.path.read_text(encoding="utf-8")))
-        except (JSONDecodeError, OSError, UnicodeDecodeError) as error:
-            raise TokenStoreError(f"could not read {self.path}: {error}") from error
-        if not isinstance(raw, dict):
-            raise TokenStoreError(f"{self.path} is not a token object")
-
-        tokens: dict[str, StoredToken] = {}
-        for login, entry in cast("dict[str, object]", raw).items():
-            if not isinstance(entry, dict):
-                raise TokenStoreError(f"{self.path} has a malformed entry")
-            fields = cast("dict[str, object]", entry)
-            values = [fields.get(name) for name in _FIELDS]
-            if not all(isinstance(value, str) and value for value in values):
-                raise TokenStoreError(f"{self.path} has a malformed entry")
-            tokens[login] = StoredToken(*cast("list[str]", values))
-        return tokens
+    def _path(self, login: str) -> Path:
+        # One file per account, so a save is a whole-file replace rather than a
+        # read-modify-write: the watcher rotating one account's token and an
+        # `--auth` in another terminal authorizing a second account write
+        # different files and cannot lose each other's update. normalize_handle
+        # is what keeps a login from naming a path outside the directory.
+        return self.directory / f"{normalize_handle(login)}.json"
 
     def get(self, login: str) -> StoredToken | None:
         """Return the stored token for a login, or ``None`` if not authorized."""
-        return self._load().get(login)
+        path = self._path(login)
+        if not path.is_file():
+            return None
+        try:
+            raw = cast(object, json.loads(path.read_text(encoding="utf-8")))
+        except (JSONDecodeError, OSError, UnicodeDecodeError) as error:
+            raise TokenStoreError(f"could not read {path}: {error}") from error
+        if not isinstance(raw, dict):
+            raise TokenStoreError(f"{path} is not a token object")
+        values = [cast("dict[str, object]", raw).get(name) for name in _FIELDS]
+        if not all(isinstance(value, str) and value for value in values):
+            raise TokenStoreError(f"{path} is malformed")
+        return StoredToken(*cast("list[str]", values))
 
     def save(self, token: StoredToken) -> None:
         """Store one account's token, replacing any previous one for that login."""
-        with self._lock:
-            tokens = self._load()
-            tokens[token.login] = token
-            try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                self._write(tokens)
-            except OSError as error:
-                raise TokenStoreError(f"could not write {self.path}: {error}") from error
+        path = self._path(token.login)
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            # The file names are account logins, so the directory listing is
+            # itself worth keeping private, and a directory left loose by an
+            # older version must not stay that way.
+            self.directory.chmod(0o700)
+            self._write(path, token)
+        except OSError as error:
+            raise TokenStoreError(f"could not write {path}: {error}") from error
 
-    def _write(self, tokens: dict[str, StoredToken]) -> None:
-        """Replace the store with ``tokens``, atomically and owner-only."""
+    def _write(self, path: Path, token: StoredToken) -> None:
+        """Replace one account's file with ``token``, atomically and owner-only."""
         # Write a sibling temp file and rename it over the real path: a crash
-        # (or a full disk) mid-write then leaves the previous store intact
+        # (or a full disk) mid-write then leaves the previous file intact
         # instead of truncated JSON that fails every later read. mkstemp
         # creates the temp at 0600, so the secrets are never written to a
         # world-readable file, and the rename carries that mode across even if
-        # the existing store was looser.
+        # the existing file was looser.
         descriptor, name = tempfile.mkstemp(
-            dir=self.path.parent, prefix=f"{self.path.name}.", suffix=".tmp"
+            dir=self.directory, prefix=f"{path.name}.", suffix=".tmp"
         )
         temp = Path(name)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump({k: asdict(v) for k, v in tokens.items()}, handle, indent=2)
+                json.dump(asdict(token), handle, indent=2)
                 # Closing only flushes to the page cache, so without this the
                 # rename can reach disk before the data: a power loss then
-                # leaves exactly the zero-length/partial tokens.json the
-                # atomic write exists to prevent.
+                # leaves exactly the zero-length/partial file the atomic write
+                # exists to prevent.
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temp, self.path)
+            os.replace(temp, path)
         except BaseException:
             temp.unlink(missing_ok=True)
             raise

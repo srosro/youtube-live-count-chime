@@ -347,7 +347,7 @@ class ChatterNamerTests(unittest.IsolatedAsyncioTestCase):
             blocked = Path(tmp) / "count-chime"
             blocked.write_text("", encoding="utf-8")
             client = ChatterClient(
-                TwitchCredentials("id", "secret"), TokenStore(blocked / "tokens.json")
+                TwitchCredentials("id", "secret"), TokenStore(blocked / "tokens")
             )
             responses: list[object] = [
                 HTTPError("https://api.twitch.tv", 401, "nope", Message(), None),

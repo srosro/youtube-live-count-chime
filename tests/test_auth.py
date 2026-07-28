@@ -156,7 +156,7 @@ class RunAuthFlowTests(unittest.TestCase):
     def setUp(self) -> None:
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
-        self.store = TokenStore(Path(self._dir.name) / "tokens.json")
+        self.store = TokenStore(Path(self._dir.name) / "tokens")
 
     def _run_flow(
         self,
@@ -261,7 +261,7 @@ class RunAuthFlowTests(unittest.TestCase):
                 _FakeCallbackServer(CALLBACK), identified=("samtriestobuild", "99")
             )
 
-        self.assertFalse(self.store.path.exists())
+        self.assertFalse(self.store.directory.exists())
 
     def test_a_silent_connection_does_not_end_the_wait(self) -> None:
         # A browser preconnect is accepted and carries nothing. The real
@@ -368,7 +368,7 @@ class RunAuthFlowTests(unittest.TestCase):
                 self._run_flow(server)
 
         self.assertEqual(server.timeouts, [1.0])  # 2.0 budget, 1.0 already spent
-        self.assertFalse(self.store.path.exists())
+        self.assertFalse(self.store.directory.exists())
 
 
 if __name__ == "__main__":

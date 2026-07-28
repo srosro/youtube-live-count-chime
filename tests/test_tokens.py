@@ -2,8 +2,6 @@ from pathlib import Path
 import os
 import stat
 import tempfile
-import threading
-import time
 from typing import IO
 import unittest
 from unittest.mock import patch
@@ -20,60 +18,73 @@ class TokenStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
-        self.path = Path(self._dir.name) / "tokens.json"
+        self.directory = Path(self._dir.name) / "tokens"
+
+    def _file(self, login: str) -> Path:
+        return self.directory / f"{login}.json"
 
     def test_missing_file_has_no_tokens(self) -> None:
-        self.assertIsNone(TokenStore(self.path).get("watchmepivot"))
+        self.assertIsNone(TokenStore(self.directory).get("watchmepivot"))
 
     def test_saved_token_round_trips(self) -> None:
-        store = TokenStore(self.path)
+        store = TokenStore(self.directory)
         store.save(_token("watchmepivot"))
 
-        restored = TokenStore(self.path).get("watchmepivot")
+        restored = TokenStore(self.directory).get("watchmepivot")
         assert restored is not None
         self.assertEqual(restored.user_id, "id-watchmepivot")
 
     def test_two_accounts_coexist(self) -> None:
         # The whole reason the store is keyed by login: one token per account.
-        store = TokenStore(self.path)
+        store = TokenStore(self.directory)
         store.save(_token("watchmepivot"))
         store.save(_token("samtriestobuild"))
 
-        reloaded = TokenStore(self.path)
+        reloaded = TokenStore(self.directory)
         self.assertIsNotNone(reloaded.get("watchmepivot"))
         self.assertIsNotNone(reloaded.get("samtriestobuild"))
 
+    def test_a_login_is_looked_up_and_stored_under_its_normalized_form(self) -> None:
+        # The file name is derived from the login, so a mixed-case or @-prefixed
+        # request must reach the same file the watcher reads back.
+        TokenStore(self.directory).save(_token("watchmepivot"))
+
+        self.assertIsNotNone(TokenStore(self.directory).get("@WatchMePivot"))
+
     def test_resaving_a_login_replaces_it(self) -> None:
-        store = TokenStore(self.path)
+        store = TokenStore(self.directory)
         store.save(_token("watchmepivot"))
         store.save(StoredToken("watchmepivot", "id-new", "a2", "r2"))
 
-        restored = TokenStore(self.path).get("watchmepivot")
+        restored = TokenStore(self.directory).get("watchmepivot")
         assert restored is not None
         self.assertEqual(restored.user_id, "id-new")
 
-    def test_file_is_not_readable_by_other_users(self) -> None:
-        TokenStore(self.path).save(_token("watchmepivot"))
+    def test_neither_the_file_nor_its_directory_is_readable_by_other_users(self) -> None:
+        TokenStore(self.directory).save(_token("watchmepivot"))
 
-        mode = stat.S_IMODE(self.path.stat().st_mode)
-        self.assertEqual(mode, 0o600)
+        self.assertEqual(stat.S_IMODE(self._file("watchmepivot").stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
 
     def test_corrupt_file_fails_loudly(self) -> None:
-        self.path.write_text("{not json", encoding="utf-8")
+        self.directory.mkdir(parents=True)
+        self._file("watchmepivot").write_text("{not json", encoding="utf-8")
 
         with self.assertRaises(TokenStoreError):
-            TokenStore(self.path).get("watchmepivot")
+            TokenStore(self.directory).get("watchmepivot")
 
-    def test_replacing_a_loose_store_is_owner_only_during_and_after_the_write(
+    def test_replacing_a_loose_file_is_owner_only_during_and_after_the_write(
         self,
     ) -> None:
-        # Regression test: if tokens.json exists at 0644 (e.g., from an older
-        # version), the secrets must never land in a world-readable file — not
-        # while they are being written, and not once the write is done. An
+        # Regression test: if the account's file exists at 0644 (e.g., from an
+        # older version), the secrets must never land in a world-readable file —
+        # not while they are being written, and not once the write is done. An
         # implementation that copied the destination's mode across the replace
-        # would leave a 0644 file full of secrets.
-        self.path.write_text("{}", encoding="utf-8")
-        self.path.chmod(0o644)
+        # would leave a 0644 file full of secrets. Same for a loose directory.
+        self.directory.mkdir(parents=True)
+        self.directory.chmod(0o755)
+        self._file("watchmepivot").write_text("{}", encoding="utf-8")
+        self._file("watchmepivot").chmod(0o644)
 
         mode_at_write: list[int] = []
 
@@ -88,23 +99,23 @@ class TokenStoreTests(unittest.TestCase):
             original_dump(obj, fp, indent=indent)
 
         with patch("youtube_live_count_chime.tokens.json.dump", side_effect=recording_dump):
-            store = TokenStore(self.path)
-            store.save(_token("watchmepivot"))
+            TokenStore(self.directory).save(_token("watchmepivot"))
 
         self.assertEqual(len(mode_at_write), 1, "json.dump should be called exactly once")
         self.assertEqual(
             mode_at_write[0], 0o600, "file mode must be 0600 when secrets are written"
         )
         self.assertEqual(
-            stat.S_IMODE(self.path.stat().st_mode),
+            stat.S_IMODE(self._file("watchmepivot").stat().st_mode),
             0o600,
-            "the replaced store must not inherit the loose file's mode",
+            "the replaced file must not inherit the loose file's mode",
         )
+        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
 
     def test_a_crash_mid_write_leaves_the_previous_tokens_intact(self) -> None:
-        # An interrupted write must not truncate the store: a half-written file
-        # is unparseable JSON, which fails every later read for every account.
-        store = TokenStore(self.path)
+        # An interrupted write must not truncate a file: a half-written one is
+        # unparseable JSON, which fails every later read for that account.
+        store = TokenStore(self.directory)
         store.save(_token("watchmepivot"))
 
         with patch(
@@ -113,14 +124,14 @@ class TokenStoreTests(unittest.TestCase):
             with self.assertRaises(TokenStoreError):
                 store.save(_token("samtriestobuild"))
 
-        reloaded = TokenStore(self.path)
+        reloaded = TokenStore(self.directory)
         restored = reloaded.get("watchmepivot")
         assert restored is not None
         self.assertEqual(restored.user_id, "id-watchmepivot")
         self.assertIsNone(reloaded.get("samtriestobuild"))
-        # And no half-written temp file is left behind next to the store.
+        # And no half-written temp file is left behind next to the tokens.
         self.assertEqual(
-            sorted(p.name for p in Path(self._dir.name).iterdir()), ["tokens.json"]
+            sorted(p.name for p in self.directory.iterdir()), ["watchmepivot.json"]
         )
 
     def test_an_unwritable_location_fails_as_a_store_error_not_a_bare_oserror(
@@ -137,37 +148,7 @@ class TokenStoreTests(unittest.TestCase):
         blocked.write_text("", encoding="utf-8")
 
         with self.assertRaises(TokenStoreError):
-            TokenStore(blocked / "tokens.json").save(_token("watchmepivot"))
-
-    def test_concurrent_saves_keep_both_accounts(self) -> None:
-        # Both watched channels refresh through one store from their own
-        # to_thread workers. An unlocked load-modify-write interleaves as
-        # load-load-write-write and drops whichever token was written first.
-        store = TokenStore(self.path)
-        original_dump = json.dump
-
-        def slow_dump(obj: object, fp: IO[str], *, indent: int | None = None) -> None:
-            # Widen the window between the load and the write so an unlocked
-            # implementation loses a token deterministically. It only has to
-            # outlast thread-start latency, so keep it small.
-            time.sleep(0.005)
-            original_dump(obj, fp, indent=indent)
-
-        with patch(
-            "youtube_live_count_chime.tokens.json.dump", side_effect=slow_dump
-        ):
-            threads = [
-                threading.Thread(target=store.save, args=(_token(login),))
-                for login in ("watchmepivot", "samtriestobuild")
-            ]
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join()
-
-        reloaded = TokenStore(self.path)
-        self.assertIsNotNone(reloaded.get("watchmepivot"))
-        self.assertIsNotNone(reloaded.get("samtriestobuild"))
+            TokenStore(blocked / "tokens").save(_token("watchmepivot"))
 
 
 if __name__ == "__main__":
