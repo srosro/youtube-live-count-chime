@@ -121,14 +121,19 @@ title. The announcement is the signal that survives streaming: OBS suppresses
 notification banners while it captures the screen, so while you are live the
 banner never displays, but audio is not suppressed.
 
-The order on a rise is chime, then announcement, then banner. A rise holds the
-audio for every watched channel while it plays, so two channels rising at once
-never talk over each other rather than overlapping. Normally that is the length
-of the chime plus the spoken line; if the audio device is pulled mid-play the
-wait is whatever the two timeouts in `sounds.py` and `speech.py` allow, which
-is deliberately long enough to never truncate a custom `--up-sound`. Only a
-rise pays it: an unchanged poll costs nothing at all, and a fall pays only the
-chime it has always paid.
+The order on a rise is chime, then announcement, then banner.
+
+Any change holds the audio for every watched channel while it plays, so two
+channels changing at once never overlap. A fall holds it for the chime alone,
+as it always has; a rise holds it for the chime and the announcement together,
+so a chime is never split from the line that explains it. An unchanged poll
+holds nothing.
+
+If the audio device is pulled mid-play, that hold lasts until the timeout in
+`sounds.py` (for the chime) or `speech.py` (for the announcement) gives up.
+The chime's is the longer of the two on purpose: it has to outlast whatever
+`--up-sound` you point it at, or a custom chime would be cut off on every
+single change.
 
 The notification body is a digest of every channel being watched, always in the
 same order:
