@@ -122,7 +122,22 @@ class ChatterClient:
         try:
             payload = get_json(request)
         except HTTPError as error:
-            raise TwitchRequestError(f"token refresh failed (HTTP {error.code})") from error
+            if error.code != 400:
+                raise TwitchRequestError(f"token refresh failed (HTTP {error.code})") from error
+            # Twitch answers 400 for a refresh token that is revoked or already
+            # redeemed — permanent. Left retryable, the 5s poll resubmits the
+            # same dead token forever and the operator never hears the one
+            # diagnosis that would fix it.
+            refusal = f"{token.login}'s Twitch authorization is no longer valid"
+            self._refused[token.access_token] = refusal
+            _LOGGER.error(
+                "Twitch refuses to refresh the token for %s. Run --auth %s "
+                "again to reauthorize. Arrivals on that channel will not be "
+                "named until then.",
+                token.login,
+                token.login,
+            )
+            raise TwitchAuthError(refusal) from error
         fields = object_dict(payload)
         if fields is None:
             raise TwitchRequestError("invalid Twitch refresh response")

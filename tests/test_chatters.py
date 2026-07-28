@@ -492,6 +492,38 @@ class ChatterClientTests(unittest.TestCase):
         self.assertIn("token store", str(refused.exception))
         self.assertNotIn("not authorized", str(refused.exception))
 
+    def test_a_permanently_rejected_refresh_short_circuits_later_polls(self) -> None:
+        # Twitch answers 400 when the refresh token has been revoked or already
+        # redeemed: no later poll can recover it. Treated as retryable, the 5s
+        # poll resubmits the same dead token forever, and the operator is never
+        # told that reauthorizing is the repair.
+        store = _RecordingStore()
+        client = ChatterClient(TwitchCredentials("id", "secret"), store)
+        responses: list[object] = [
+            self._http_error(401),  # the read: token expired
+            self._http_error(400),  # the refresh: the grant is gone
+        ]
+
+        with patch(
+            "youtube_live_count_chime.chatters.get_json",
+            side_effect=lambda request: _next_response(responses),
+        ):
+            with self.assertLogs("youtube_live_count_chime.chatters", "ERROR") as logs:
+                with self.assertRaises(TwitchAuthError):
+                    client.chatters(TOKEN)
+
+        self.assertEqual(responses, [])  # one read, one refresh, no retry
+        self.assertIn("--auth watchmepivot", "\n".join(logs.output))
+        self.assertEqual(store.saved, [])
+
+        # The store still holds the stale token, so every later poll presents
+        # it: no read, no second refresh POST, and no second telling.
+        with patch("youtube_live_count_chime.chatters.get_json") as get_json:
+            with self.assertNoLogs("youtube_live_count_chime.chatters", "ERROR"):
+                with self.assertRaises(TwitchAuthError):
+                    client.chatters(TOKEN)
+        self.assertEqual(get_json.call_count, 0)
+
     def test_a_non_401_failure_is_not_retried(self) -> None:
         client = ChatterClient(TwitchCredentials("id", "secret"), _RecordingStore())
         responses: list[object] = [self._http_error(500)]
