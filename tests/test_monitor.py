@@ -257,26 +257,27 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         # The chime is the pre-existing signal and owes nothing to the
-        # network, so it precedes both the announcement and the banner's real
-        # (~0.13s) osascript call; the announcement precedes the banner
-        # because it is the signal that survives OBS suppressing banners.
+        # network, so it precedes both the announcement and the banner's
+        # osascript call; the announcement precedes the banner because it is
+        # the signal that survives OBS suppressing banners.
         # And each is awaited inline, so one channel's rises are announced and
         # posted in order rather than collapsing or overlapping. A single-rise
         # version of this passes even with the work detached, because the
         # TaskGroup joins it before monitor() returns; two rises and steps
-        # that take time are what separate the two designs. (The exact
-        # title and body are pinned by the digest tests, not here.)
+        # that take time are what separate the two designs.
         a = StreamTarget(Platform.TWITCH, "chan")
         events: list[str] = []
+        spoken: list[str] = []
+        posted: list[str] = []
 
         def slow_speak(text: str) -> None:
-            # Real speech takes ~3.6s.
             time.sleep(0.05)
+            spoken.append(text)
             events.append("speak")
 
         def slow_notify(title: str, body: str) -> None:
-            # Real osascript takes ~0.13s.
             time.sleep(0.05)
+            posted.append(title)
             events.append("notify")
 
         await monitor(
@@ -290,6 +291,10 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             events, ["chime", "speak", "notify", "chime", "speak", "notify"]
         )
+        # The DRY contract, on the same two rises: one wording reaches both
+        # consumers, so a streamer hears exactly what the banner would have
+        # said. Two format strings drift the moment either is reworded.
+        self.assertEqual(posted, spoken)
 
     async def test_two_channels_rising_at_once_never_talk_over_each_other(self) -> None:
         # The point of speaking *inside* chime_lock: a channel's chime and the
@@ -329,25 +334,6 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             sorted(event for event in events if event.startswith("speak:")),
             ["speak:1 new viewer on twitch a", "speak:2 new viewers on youtube b"],
         )
-
-    async def test_the_spoken_line_is_the_banner_title(self) -> None:
-        # The DRY contract: one wording reaches both consumers, so a streamer
-        # hears exactly what the banner would have said. Two format strings
-        # would drift the moment either is reworded.
-        a = StreamTarget(Platform.TWITCH, "chan")
-        spoken: list[str] = []
-        posted: list[tuple[str, str]] = []
-
-        await monitor(
-            [FakeSource(a, [live(a, 1), live(a, 3)])],
-            ChimeConfig(UP, DOWN),
-            play=lambda path: None,
-            speak=spoken.append,
-            notify=lambda title, body: posted.append((title, body)),
-        )
-
-        self.assertEqual(spoken, ["2 new viewers on twitch chan"])
-        self.assertEqual([title for title, _ in posted], spoken)
 
     async def test_a_fall_chimes_but_neither_speaks_nor_posts(self) -> None:
         a = StreamTarget(Platform.TWITCH, "chan")
