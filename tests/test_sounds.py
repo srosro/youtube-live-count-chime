@@ -25,10 +25,10 @@ class PlaySoundTests(unittest.TestCase):
             text=True,
         )
         # The bound is what stops a wedged afplay holding the fleet-wide audio
-        # lock forever. It must clear a real ~1.9s chime and still cap a wedge
-        # inside a poll interval.
-        self.assertGreater(_TIMEOUT_SECONDS, 2.0)
-        self.assertLessEqual(_TIMEOUT_SECONDS, POLL_INTERVAL_SECONDS)
+        # lock forever. It must clear any plausible custom --up-sound, not just
+        # the ~1.9s default, since truncating a working chime on every change
+        # would be a worse bug than the wedge it guards.
+        self.assertGreaterEqual(_TIMEOUT_SECONDS, 4 * POLL_INTERVAL_SECONDS)
 
     def test_playback_failure_becomes_sound_playback_error(self) -> None:
         # Every arm of the catch: a non-zero afplay exit, afplay being

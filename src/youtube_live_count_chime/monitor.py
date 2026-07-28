@@ -54,9 +54,12 @@ async def monitor(
     channel's task waits on it. Playback, speech, and notification failures
     are each warned and skipped so one channel's glitch never stops the
     watcher: a failed announcement still leaves the chime played and the
-    banner posted, and none of them costs the other channels. Any other exception escaping a source is an unexpected
-    bug: the TaskGroup cancels the siblings and ``main`` reports it (named
-    with the channel) and exits non-zero.
+    banner posted. They are not free to the other channels, though — the
+    chime and the announcement are awaited under the audio lock every source
+    shares, so a wedged one blocks every channel's audio until its bound
+    expires. Any other exception escaping a source is an unexpected bug: the
+    TaskGroup cancels the siblings and ``main`` reports it (named with the
+    channel) and exits non-zero.
     """
     chime_lock = asyncio.Lock()
     order = tuple(source.target for source in sources)
