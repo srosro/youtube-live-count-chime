@@ -291,6 +291,45 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             events, ["chime", "speak", "notify", "chime", "speak", "notify"]
         )
 
+    async def test_two_channels_rising_at_once_never_talk_over_each_other(self) -> None:
+        # The point of speaking *inside* chime_lock: a channel's chime and the
+        # announcement it introduces are one uninterruptible unit of audio, so
+        # a second channel rising at the same moment queues behind the whole
+        # pair rather than chiming into the middle of someone's sentence.
+        # Hoisting `speak` out of the lock (or taking the lock twice) reorders
+        # this to chime, chime, speak, speak — which is the failure this pins.
+        # Speech is slow, so the window for the other channel to cut in is
+        # real; only the lock closes it.
+        a = StreamTarget(Platform.TWITCH, "a")
+        b = StreamTarget(Platform.YOUTUBE, "b")
+        events: list[str] = []
+
+        def slow_speak(text: str) -> None:
+            time.sleep(0.05)  # real speech takes ~3.6s
+            events.append(f"speak:{text}")
+
+        await monitor(
+            [
+                FakeSource(a, [live(a, 1), live(a, 2)]),
+                FakeSource(b, [live(b, 10), live(b, 12)]),
+            ],
+            ChimeConfig(UP, DOWN),
+            play=lambda path: events.append("chime"),
+            speak=slow_speak,
+            notify=silent,
+        )
+
+        # Which channel wins the lock first is scheduling, but the pairing is
+        # not: every chime is immediately followed by its own announcement.
+        self.assertEqual(
+            [event.split(":")[0] for event in events],
+            ["chime", "speak", "chime", "speak"],
+        )
+        self.assertEqual(
+            sorted(event for event in events if event.startswith("speak:")),
+            ["speak:1 new viewer on twitch a", "speak:2 new viewers on youtube b"],
+        )
+
     async def test_the_spoken_line_is_the_banner_title(self) -> None:
         # The DRY contract: one wording reaches both consumers, so a streamer
         # hears exactly what the banner would have said. Two format strings
