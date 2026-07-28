@@ -253,22 +253,21 @@ class RunAuthFlowTests(unittest.TestCase):
         self.assertNotIn("attacker", out.getvalue())
         self.assertNotIn("stale-tab", out.getvalue())
 
-    def test_no_request_can_be_the_callback_once_the_flow_is_over(self) -> None:
-        # Between flows there is no state to match, so a late (or replayed)
-        # request must not be recorded as a callback the next flow would then
-        # pick up as its own. A flow that ends by *raising* is the case with
-        # teeth: the port being already in use leaves run_auth_flow before any
-        # post-server reset would run, so only the `finally` keeps the
-        # invariant real — and that AuthError is the user's whole diagnosis.
-        self._run_flow(_FakeCallbackServer(CALLBACK))
-        self.assertIsNone(_CallbackHandler.expected_state)
+    def test_a_port_already_in_use_fails_before_authorization_begins(self) -> None:
+        # The listener must own the redirect port before the browser is sent to
+        # Twitch, or a local process holding 8419 in that window receives the
+        # one-time code. So nothing is printed and no browser opens: the bind
+        # failure — the user's whole diagnosis — precedes any consent.
+        out = io.StringIO()
+        with redirect_stdout(out):
+            with self.assertRaisesRegex(
+                AuthError, f"could not bind to port {REDIRECT_PORT}"
+            ):
+                self._run_flow(
+                    _FakeCallbackServer(CALLBACK), bind_error=OSError("address in use")
+                )
 
-        with self.assertRaisesRegex(AuthError, f"could not bind to port {REDIRECT_PORT}"):
-            self._run_flow(
-                _FakeCallbackServer(CALLBACK), bind_error=OSError("address in use")
-            )
-
-        self.assertIsNone(_CallbackHandler.expected_state)
+        self.assertEqual(out.getvalue(), "")
 
     def test_a_later_flow_still_reports_its_own_stale_tab(self) -> None:
         # The stale-consent-tab notice is armed per flow. A regression dropping

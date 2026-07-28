@@ -164,8 +164,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
     path_seen: str | None = None
     # The state run_auth_flow generated for the flow in progress; ``None``
-    # between flows, when nothing can be the callback. run_auth_flow resets it
-    # when the flow ends, like path_seen.
+    # until the first flow arms it.
     expected_state: str | None = None
     # Whether a callback for some *other* state has already been reported this
     # flow. It is worth saying once — see do_GET — and only once.
@@ -215,7 +214,10 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
         if is_callback:
-            self.wfile.write(b"Authorized. You can close this tab and return to the terminal.")
+            # Neutral on purpose: a state-valid ?error=access_denied is the
+            # callback and ends the wait, but parse_callback then rejects it.
+            # Saying "Authorized" here would contradict the terminal.
+            self.wfile.write(b"Authorization response received; return to the terminal.")
         else:
             self.wfile.write(b"Waiting for the authorization callback...")
 
@@ -238,40 +240,37 @@ def run_auth_flow(
     _CallbackHandler.path_seen = None
     _CallbackHandler.mismatch_reported = False
     _CallbackHandler.expected_state = state
+    try:
+        server = HTTPServer((REDIRECT_HOST, REDIRECT_PORT), _CallbackHandler)
+    except OSError as error:
+        raise AuthError(
+            f"could not bind to port {REDIRECT_PORT} (already in use?)"
+        ) from error
+
+    # Only now, with the redirect listener owning the port: authorizing first
+    # would leave a window in which any local process could bind 8419 and
+    # receive the one-time authorization code.
     url = authorize_url(credentials.client_id, state)
     print(f"Opening browser to authorize {login} …", flush=True)
     print(f"If it does not open, visit:\n  {url}", flush=True)
     open_browser(url)
 
-    try:
-        try:
-            server = HTTPServer((REDIRECT_HOST, REDIRECT_PORT), _CallbackHandler)
-        except OSError as error:
-            raise AuthError(
-                f"could not bind to port {REDIRECT_PORT} (already in use?)"
-            ) from error
-
-        with server:
-            deadline = time.monotonic() + _FLOW_TIMEOUT_SECONDS
-            # do_GET only records path_seen for a request that actually
-            # carries this flow's state and the callback (a code or error),
-            # so a stray request — a preconnect that did send a request line,
-            # a favicon probe, another local process hitting the port with
-            # ?error=x — is tolerated and does not end this loop. A
-            # connection that never sends a request line at all (e.g. a bare
-            # TCP preconnect) is also tolerated, just silently rather than
-            # with a reply. Keep accepting requests until we see the real
-            # callback or the overall budget expires.
-            while _CallbackHandler.path_seen is None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                server.timeout = remaining
-                server.handle_request()
-    finally:
-        # No flow is in progress once this returns, so nothing can be a
-        # callback — keep the documented invariant real.
-        _CallbackHandler.expected_state = None
+    with server:
+        deadline = time.monotonic() + _FLOW_TIMEOUT_SECONDS
+        # do_GET only records path_seen for a request that actually carries
+        # this flow's state and the callback (a code or error), so a stray
+        # request — a preconnect that did send a request line, a favicon
+        # probe, another local process hitting the port with ?error=x — is
+        # tolerated and does not end this loop. A connection that never sends
+        # a request line at all (e.g. a bare TCP preconnect) is also
+        # tolerated, just silently rather than with a reply. Keep accepting
+        # requests until we see the real callback or the budget expires.
+        while _CallbackHandler.path_seen is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            server.timeout = remaining
+            server.handle_request()
 
     seen = _CallbackHandler.path_seen
     if seen is None:
