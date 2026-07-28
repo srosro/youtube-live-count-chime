@@ -246,35 +246,6 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events, ["chime", "notify"])
 
-    async def test_a_rise_notifies_with_the_delta_and_the_whole_roster(
-        self,
-    ) -> None:
-        # The body is the digest of *every* watched channel, in source order —
-        # not just the one that moved. Ordering b's poll ahead of a's rise
-        # removes the cross-task scheduling nondeterminism, so the whole body
-        # can be pinned exactly; a substring check on the rising channel would
-        # also pass against a body that dropped b entirely, or that rendered
-        # the count as 30.
-        a = StreamTarget(Platform.TWITCH, "watchmepivot")
-        b = StreamTarget(Platform.YOUTUBE, "srosrosr")
-        posted: list[tuple[str, str]] = []
-        polled = asyncio.Event()
-
-        await monitor(
-            [
-                FollowingSource(a, [live(a, 1), live(a, 3)], polled),
-                LeadingSource(b, [live(b, 7)], polled),
-            ],
-            ChimeConfig(UP, DOWN),
-            play=lambda path: None,
-            notify=lambda title, body: posted.append((title, body)),
-        )
-
-        self.assertEqual(len(posted), 1)
-        title, body = posted[0]
-        self.assertEqual(title, "+2 watching twitch watchmepivot")
-        self.assertEqual(body, "twitch watchmepivot 3 · youtube srosrosr 7")
-
     async def test_a_slow_notification_does_not_delay_the_next_poll(self) -> None:
         # Delivery is bounded but real (10s), and the polling generator sleeps
         # its interval only once the consumer comes back for the next
@@ -353,33 +324,41 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_digest_tells_a_failed_poll_apart_from_a_confirmed_offline(
         self,
     ) -> None:
-        # The three roster states must all survive the trip through monitor. A
-        # failed poll means "unknown", which is neither "offline" nor "still
-        # 7", so the rising channel's banner must not publish the blind
-        # channel's pre-outage count as though it were current. And `offline`
-        # is only reachable because the roster is written before the offline
-        # branch returns: moving that write below it degrades every observed
-        # offline channel to `?`.
+        # The banner is the digest of *every* watched channel in source order,
+        # not just the one that moved, and all three roster states must
+        # survive the trip through monitor. A failed poll means "unknown",
+        # which is neither "offline" nor "still 7", so the rising channel's
+        # banner must not publish the blind channel's pre-outage count as
+        # though it were current. And `offline` is only reachable because the
+        # roster is written before the offline branch returns: moving that
+        # write below it degrades every observed offline channel to `?`.
+        # Holding the rise until the other three have reported removes the
+        # cross-task scheduling nondeterminism, so title and body can both be
+        # pinned exactly — a substring check would also pass against a body
+        # that dropped the steady channel entirely.
         rising = StreamTarget(Platform.YOUTUBE, "rising")
+        steady = StreamTarget(Platform.YOUTUBE, "steady")
         blind = StreamTarget(Platform.TWITCH, "blind")
         ended = StreamTarget(Platform.TWITCH, "ended")
         posted: list[tuple[str, str]] = []
+        steady_polled = asyncio.Event()
         blind_polled = asyncio.Event()
         ended_polled = asyncio.Event()
-        both_polled = asyncio.Event()
+        all_polled = asyncio.Event()
 
         async def release_the_rise() -> None:
-            """Hold the rise until both other channels have reported."""
-            await blind_polled.wait()
-            await ended_polled.wait()
-            both_polled.set()
+            """Hold the rise until every other channel has reported."""
+            for polled in (steady_polled, blind_polled, ended_polled):
+                await polled.wait()
+            all_polled.set()
 
         await asyncio.gather(
             monitor(
                 [
                     FollowingSource(
-                        rising, [live(rising, 1), live(rising, 2)], both_polled
+                        rising, [live(rising, 1), live(rising, 2)], all_polled
                     ),
+                    LeadingSource(steady, [live(steady, 4)], steady_polled),
                     LeadingSource(blind, [live(blind, 7), None], blind_polled),
                     LeadingSource(ended, [StreamSnapshot.offline(ended)], ended_polled),
                 ],
@@ -391,9 +370,12 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(posted), 1)
-        body = posted[0][1]
-        self.assertIn("twitch blind ?", body)
-        self.assertIn("twitch ended offline", body)
+        title, body = posted[0]
+        self.assertEqual(title, "+1 watching youtube rising")
+        self.assertEqual(
+            body,
+            "youtube rising 2 · youtube steady 4 · twitch blind ? · twitch ended offline",
+        )
 
 
 if __name__ == "__main__":
