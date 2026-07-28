@@ -7,6 +7,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from youtube_live_count_chime.auth import (
+    REDIRECT_PORT,
     REDIRECT_URI,
     SCOPE,
     AuthError,
@@ -176,14 +177,20 @@ class RunAuthFlowTests(unittest.TestCase):
         *,
         login: str = "WatchMePivot",
         identified: tuple[str, str] = ("watchmepivot", "42"),
+        bind_error: OSError | None = None,
     ) -> StoredToken:
         """Run the flow with the network, the browser, and the server faked."""
+        http_server = (
+            patch("youtube_live_count_chime.auth.HTTPServer", side_effect=bind_error)
+            if bind_error is not None
+            else patch("youtube_live_count_chime.auth.HTTPServer", return_value=server)
+        )
         with (
             patch(
                 "youtube_live_count_chime.auth.secrets.token_urlsafe",
                 return_value="fixed-state",
             ),
-            patch("youtube_live_count_chime.auth.HTTPServer", return_value=server),
+            http_server,
             patch(
                 "youtube_live_count_chime.auth._exchange_code",
                 return_value=("access-tok", "refresh-tok"),
@@ -267,10 +274,33 @@ class RunAuthFlowTests(unittest.TestCase):
     def test_no_request_can_be_the_callback_once_the_flow_is_over(self) -> None:
         # Between flows there is no state to match, so a late (or replayed)
         # request must not be recorded as a callback the next flow would then
-        # pick up as its own.
+        # pick up as its own. A flow that ends by *raising* is the case with
+        # teeth: the port being already in use leaves run_auth_flow before any
+        # post-server reset would run, so only the `finally` keeps the
+        # invariant real — and that AuthError is the user's whole diagnosis.
         self._run_flow(_FakeCallbackServer(CALLBACK))
+        self.assertIsNone(_CallbackHandler.expected_state)
+
+        with self.assertRaisesRegex(AuthError, f"could not bind to port {REDIRECT_PORT}"):
+            self._run_flow(
+                _FakeCallbackServer(CALLBACK), bind_error=OSError("address in use")
+            )
 
         self.assertIsNone(_CallbackHandler.expected_state)
+
+    def test_a_later_flow_still_reports_its_own_stale_tab(self) -> None:
+        # The stale-consent-tab notice is armed per flow. A regression dropping
+        # the per-flow reset would silently restore the five-minute hang for
+        # every flow after the first.
+        for attempt in ("first", "second"):
+            out = io.StringIO()
+            with self.subTest(attempt=attempt), redirect_stdout(out):
+                self._run_flow(
+                    _FakeCallbackServer("/?code=abc123&state=stale-tab", CALLBACK)
+                )
+                self.assertEqual(
+                    out.getvalue().count("Ignoring an authorization callback"), 1
+                )
 
     def test_the_overall_budget_bounds_the_wait_and_shrinks_per_attempt(self) -> None:
         # Without a deadline a browser that never returns hangs the terminal
