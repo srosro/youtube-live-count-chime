@@ -12,7 +12,7 @@ class PostNotificationTests(unittest.TestCase):
         # injection attempt throughout: it must reach AppleScript as a single
         # opaque argv element, never as script text.
         hostile = '" & (do shell script "touch /tmp/pwned") & "'
-        with patch("youtube_live_count_chime.notify.subprocess.run") as run:
+        with patch("youtube_live_count_chime.macos.subprocess.run") as run:
             post_notification(hostile, "a body")
 
         command = run.call_args.args[0]
@@ -51,7 +51,7 @@ class PostNotificationTests(unittest.TestCase):
         for failure in failures:
             with self.subTest(failure=type(failure).__name__):
                 with patch(
-                    "youtube_live_count_chime.notify.subprocess.run", side_effect=failure
+                    "youtube_live_count_chime.macos.subprocess.run", side_effect=failure
                 ):
                     with self.assertRaises(NotificationError) as ctx:
                         post_notification("+2 watching twitch chan", "twitch chan 4")

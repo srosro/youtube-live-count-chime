@@ -2,7 +2,8 @@
 
 A small, strictly typed macOS command-line watcher that monitors the live viewer
 count of multiple YouTube and Twitch channels at once and plays one sound when a
-count increases and a different sound when it decreases.
+count increases and a different sound when it decreases. A rise is also spoken
+out loud.
 
 ## Requirements
 
@@ -112,11 +113,31 @@ Twitch credentials are needed at all.)
 
 Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 
-## Notifications
+## Announcements and notifications
 
-A rise in the viewer count also posts a macOS notification. Its title reports
-the rise on the channel that moved — `+2 watching twitch watchmepivot` — and its
-body is a digest of every channel being watched, always in the same order:
+A rise in the viewer count is announced out loud and also posts a macOS
+notification. Both say the same sentence — `2 new viewers on twitch
+watchmepivot` — spoken through the macOS `say` voice and used as the banner
+title. The announcement is the signal that survives streaming: OBS suppresses
+notification banners while it captures the screen, so while you are live the
+banner never displays, but audio is not suppressed.
+
+The order on a rise is chime, then announcement, then banner.
+
+Any change holds the audio for every watched channel while it plays, so two
+channels changing at once never overlap. A fall holds it for the chime alone,
+as it always has; a rise holds it for the chime and the announcement together,
+so a chime is never split from the line that explains it. An unchanged poll
+holds nothing.
+
+If the audio device is pulled mid-play, that hold lasts until the timeout in
+`sounds.py` (for the chime) or `speech.py` (for the announcement) gives up.
+The chime's is the longer of the two on purpose: it has to outlast whatever
+`--up-sound` you point it at, or a custom chime would be cut off on every
+single change.
+
+The notification body is a digest of every channel being watched, always in the
+same order:
 
 ```
 twitch watchmepivot 3 · youtube srosrosr 4 · twitch offchannel offline
@@ -127,11 +148,12 @@ has not been polled yet — or whose last poll failed — reads `?` rather than 
 stale number. `offline` is reachable only where the platform says so, which
 today means Twitch; a YouTube channel that isn't live is indistinguishable from
 a failed poll and also reads `?` (see [Limitations](#limitations)). A fall
-chimes but posts no notification.
+chimes only — it is neither announced nor posted.
 
 Notifications go through `osascript`, so the first rise may prompt for
-notification permission. If the banner cannot be posted the watcher logs a
-warning and keeps watching; the chime always plays first and never waits on it.
+notification permission. If the announcement or the banner fails, the watcher
+logs a warning and keeps watching; the chime always plays first and never waits
+on either, and a failed announcement still leaves the banner posted.
 
 ## Run at login (macOS)
 

@@ -1,1 +1,1 @@
-"""YouTube livestream viewer-count chimes for macOS."""
+"""Livestream viewer-count chimes, with spoken rises, for macOS."""
