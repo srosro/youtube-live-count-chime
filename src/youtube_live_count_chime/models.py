@@ -106,12 +106,13 @@ async def poll_snapshots(
 ) -> AsyncIterator[StreamSnapshot | None]:
     """Poll ``fetch`` forever, yielding snapshots and surviving fetch failures.
 
-    A failed poll yields ``None``: the channel is *unknown*, which is not
-    ``StreamSnapshot.offline()`` ("confirmed not streaming"). Skipping the
-    yield instead leaves the consumer publishing pre-outage state as current.
-
-    An unreachable channel fails every poll, so warn only on the transition
-    *into* failure; a successful poll re-arms it for the next distinct outage.
+    Entering an outage yields ``None`` once: the channel is *unknown*, which
+    is not ``StreamSnapshot.offline()`` ("confirmed not streaming"). Saying
+    nothing at all would leave the consumer publishing pre-outage state as
+    current, but repeating it every poll would say nothing new — the
+    consumer's response is idempotent, so only the transition carries
+    information. A successful poll re-arms both the warning and the marker
+    for the next distinct outage.
     """
     warned = False
     while True:
@@ -122,7 +123,7 @@ async def poll_snapshots(
                 # `name` already carries the platform, e.g. "youtube:mkbhd".
                 _LOGGER.warning("could not fetch %s: %s", name, error)
                 warned = True
-            yield None
+                yield None
         else:
             warned = False
             yield snapshot

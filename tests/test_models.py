@@ -57,8 +57,9 @@ class PollSnapshotsTests(unittest.IsolatedAsyncioTestCase):
     target = StreamTarget(Platform.YOUTUBE, "a")
 
     async def test_warns_once_per_outage_and_rearms_after_a_success(self) -> None:
-        # Three consecutive failures are one outage, so they warn once; the
-        # success in between re-arms, so the second outage warns again.
+        # Three consecutive failures are one outage, so they warn once and
+        # mark unknown once; the success in between re-arms both, so the
+        # second outage warns and marks again.
         live = StreamSnapshot(self.target, "vid", 7)
         outcomes: list[StreamSnapshot | SourceFetchError] = [
             SourceFetchError("first down"),
@@ -88,9 +89,11 @@ class PollSnapshotsTests(unittest.IsolatedAsyncioTestCase):
                 if seen.count(live) == 2:  # both outages are behind us
                     break
 
-        # Every failed poll is reported, not silently skipped: the consumer
-        # must learn the count is unknown rather than keep the stale one.
-        self.assertEqual(seen, [None, None, None, live, None, live])
+        # Entering an outage is reported once, not silently skipped: the
+        # consumer must learn the count is unknown rather than keep the stale
+        # one. Repeating it every poll would say nothing new — the consumer's
+        # response is idempotent — so the marker tracks the warning exactly.
+        self.assertEqual(seen, [None, live, None, live])
         warnings = [record.getMessage() for record in logs.records]
         self.assertEqual(len(warnings), 2)
         self.assertIn("could not fetch youtube:a: first down", warnings[0])
