@@ -19,6 +19,14 @@ class DescribeRiseTests(unittest.TestCase):
                     f"{expected} on twitch watchmepivot",
                 )
 
+    def test_a_non_rise_is_a_programming_error_rather_than_a_worded_line(self) -> None:
+        # Only a rise is narrated, so a fall reaching here would word nonsense
+        # ("-3 new viewer on ...") for a sentence nobody should be building.
+        for delta in (0, -3):
+            with self.subTest(delta=delta):
+                with self.assertRaises(AssertionError):
+                    describe_rise(TWITCH_A, delta)
+
 
 class RenderRosterTests(unittest.TestCase):
     def test_renders_every_channel_in_fixed_order_including_unchanged(self) -> None:

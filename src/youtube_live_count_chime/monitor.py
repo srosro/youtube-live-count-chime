@@ -44,9 +44,13 @@ async def monitor(
     banner title. The roster of current counts is
     shared across consumers, so every notification carries the same
     fixed-shape digest of every watched channel. The chime fires first,
-    unconditionally, and awaited; the banner is then posted inline, so its
-    title and body describe one moment and this channel's banners stay in
-    order. Delivery costs ~0.13s against a 5s poll interval and only this
+    unconditionally, and awaited; the banner is then posted inline, so this
+    channel's banners stay in order. Title and body are *not* one instant: the
+    delta is measured before the audio, and ``render_roster`` reads the shared
+    counts ~5.5s later (longer under lock contention), so another channel's
+    count in the body can be newer than the title's rise — and the rising
+    channel's own body count is its latest, which is what the digest is for.
+    Delivery costs ~0.13s against a 5s poll interval and only this
     channel's task waits on it. Playback, speech, and notification failures
     are each warned and skipped so one channel's glitch never stops the
     watcher: a failed announcement still leaves the chime played and the
@@ -60,6 +64,15 @@ async def monitor(
 
     async def consume(source: StreamSource) -> None:
         previous: StreamSnapshot | None = None
+
+        async def chime(sound: Path) -> None:
+            try:
+                await asyncio.to_thread(play, sound)
+            except SoundPlaybackError as error:
+                _LOGGER.warning(
+                    "could not play chime for %s: %s", source.target.key, error
+                )
+
         try:
             async for snapshot in source.snapshots():
                 if snapshot is None:
@@ -92,7 +105,6 @@ async def monitor(
                     delta = snapshot.viewers - previous.viewers
                     rising = delta > 0
                     direction = "up" if rising else "down"
-                    sound = config.up_sound if rising else config.down_sound
                     print(
                         f"{source.target.key}: {previous.viewers} -> {snapshot.viewers} "
                         f"({direction})",
@@ -103,31 +115,29 @@ async def monitor(
                     # call, so posting it first would delay every chime
                     # behind I/O.
                     #
-                    # Speech is audio too, so it shares the chime's lock:
-                    # two channels rising at once must never talk over each
-                    # other or over a chime. Measured cost, accepted: Glass
-                    # is ~1.9s and a spoken line ~3.6s, so a rise holds the
-                    # lock ~5.5s and delays that channel's next poll by about
-                    # one extra interval. Only a rise pays it — an unchanged
-                    # poll costs nothing, and a fall pays only the chime it
-                    # already paid. That is the chosen shape: a bare chime
-                    # carries no information while streaming.
-                    announcement = describe_rise(source.target, delta)
-                    async with chime_lock:
-                        try:
-                            await asyncio.to_thread(play, sound)
-                        except SoundPlaybackError as error:
-                            _LOGGER.warning(
-                                "could not play chime for %s: %s", source.target.key, error
-                            )
-                        if rising:
+                    # Speech is audio too, so it shares the chime's lock, and
+                    # both are taken under a *single* acquisition: two
+                    # channels rising at once must never talk over each other
+                    # or over a chime, and a chime must never be separated
+                    # from the announcement it introduces. Measured cost,
+                    # accepted: Glass is ~1.9s and a spoken line ~3.6s, so a
+                    # rise holds the lock ~5.5s — and because the lock is
+                    # shared by every source, that is ~5.5s in which *any*
+                    # channel with a change waits, not just this one. Only a
+                    # rise pays it — an unchanged poll costs nothing, and a
+                    # fall pays only the chime it already paid. That is the
+                    # chosen shape: a bare chime carries no information while
+                    # streaming.
+                    if rising:
+                        announcement = describe_rise(source.target, delta)
+                        async with chime_lock:
+                            await chime(config.up_sound)
                             try:
                                 await asyncio.to_thread(speak, announcement)
                             except SpeechError as error:
                                 _LOGGER.warning(
                                     "could not speak for %s: %s", source.target.key, error
                                 )
-                    if rising:
                         try:
                             await asyncio.to_thread(
                                 notify,
@@ -138,6 +148,9 @@ async def monitor(
                             _LOGGER.warning(
                                 "could not notify for %s: %s", source.target.key, error
                             )
+                    else:
+                        async with chime_lock:
+                            await chime(config.down_sound)
                 previous = snapshot
         except Exception as error:
             # Name the channel in the failure that main will report.
