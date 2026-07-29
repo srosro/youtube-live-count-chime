@@ -294,11 +294,24 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             events, ["chime", "speak", "notify", "chime", "speak", "notify"]
         )
-        # The DRY contract, on the same two rises: one wording reaches both
-        # consumers, and the *only* difference is the pronunciation layer. Two
-        # format strings drift the moment either is reworded; a spoken line
-        # that skipped `for_speech` fails here too.
-        self.assertEqual(spoken, [for_speech(title) for title in posted])
+        # Both halves of the contract, as literal bytes. Deriving the
+        # expectation with for_speech() would pin nothing: it is idempotent on
+        # its own output, so respelling the banner too would still pass, as
+        # would for_speech regressing to identity.
+        self.assertEqual(
+            posted,
+            [
+                "1 new viewer on twitch watchmepivot",
+                "1 new viewer on twitch watchmepivot",
+            ],
+        )
+        self.assertEqual(
+            spoken,
+            [
+                "1 new viewer on twitch watch me pivot",
+                "1 new viewer on twitch watch me pivot",
+            ],
+        )
 
     async def test_two_channels_rising_at_once_never_talk_over_each_other(self) -> None:
         # Pins speech *inside* chime_lock: hoisting it out, or taking the lock
