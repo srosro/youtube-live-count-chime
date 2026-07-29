@@ -116,9 +116,10 @@ Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 ## Announcements and notifications
 
 A rise in the viewer count is announced out loud and also posts a macOS
-notification. Both say the same sentence — `2 new viewers on twitch
-watchmepivot` — spoken through the macOS `say` voice and used as the banner
-title. The announcement is the signal that survives streaming: OBS suppresses
+notification. One sentence is worded once — `2 new viewers on twitch
+watchmepivot` — and used verbatim as the banner title; the macOS `say` voice
+speaks a respelled rendering of it ("watch me pivot"), per the pronunciation
+table below. The announcement is the signal that survives streaming: OBS suppresses
 notification banners while it captures the screen, so while you are live the
 banner never displays, but audio is not suppressed.
 
