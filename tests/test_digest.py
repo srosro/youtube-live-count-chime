@@ -1,6 +1,6 @@
 import unittest
 
-from youtube_live_count_chime.digest import describe_rise, render_roster
+from youtube_live_count_chime.digest import describe_rise, for_speech, render_roster
 from youtube_live_count_chime.models import Platform, StreamTarget
 
 
@@ -18,6 +18,29 @@ class DescribeRiseTests(unittest.TestCase):
                     describe_rise(TWITCH_A, delta),
                     f"{expected} on twitch watchmepivot",
                 )
+
+
+class ForSpeechTests(unittest.TestCase):
+    def test_respells_handles_and_leaves_the_rest_of_the_line_alone(self) -> None:
+        cases = (
+            ("2 new viewers on twitch plucas_pivots", "2 new viewers on twitch plucas pivots"),
+            ("2 new viewers on twitch watchmepivot", "2 new viewers on twitch watch me pivot"),
+            (
+                "2 new viewers on twitch samtriestobuild",
+                "2 new viewers on twitch sam tries to build",
+            ),
+            # No rule: through untouched.
+            ("2 new viewers on youtube srosrosr", "2 new viewers on youtube srosrosr"),
+            # A handle merely containing a listed one is a different channel,
+            # and rewriting it would announce somebody else's name.
+            ("1 new viewer on twitch watchmepivot2", "1 new viewer on twitch watchmepivot2"),
+            ("1 new viewer on twitch watchmepivot-2", "1 new viewer on twitch watchmepivot-2"),
+            ("1 new viewer on twitch xwatchmepivot", "1 new viewer on twitch xwatchmepivot"),
+            ("1 new viewer on twitch watchmepivot.tv", "1 new viewer on twitch watchmepivot.tv"),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(for_speech(line), expected)
 
 
 class RenderRosterTests(unittest.TestCase):

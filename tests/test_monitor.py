@@ -265,7 +265,9 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         # version of this passes even with the work detached, because the
         # TaskGroup joins it before monitor() returns; two rises and steps
         # that take time are what separate the two designs.
-        a = StreamTarget(Platform.TWITCH, "chan")
+        # A handle with a pronunciation rule, so the DRY assertion below is not
+        # vacuously true.
+        a = StreamTarget(Platform.TWITCH, "watchmepivot")
         events: list[str] = []
         spoken: list[str] = []
         posted: list[str] = []
@@ -291,10 +293,24 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             events, ["chime", "speak", "notify", "chime", "speak", "notify"]
         )
-        # The DRY contract, on the same two rises: one wording reaches both
-        # consumers, so a streamer hears exactly what the banner would have
-        # said. Two format strings drift the moment either is reworded.
-        self.assertEqual(posted, spoken)
+        # Both halves of the contract, as literal bytes. Deriving the
+        # expectation with for_speech() would pin nothing: it is idempotent on
+        # its own output, so respelling the banner too would still pass, as
+        # would for_speech regressing to identity.
+        self.assertEqual(
+            posted,
+            [
+                "1 new viewer on twitch watchmepivot",
+                "1 new viewer on twitch watchmepivot",
+            ],
+        )
+        self.assertEqual(
+            spoken,
+            [
+                "1 new viewer on twitch watch me pivot",
+                "1 new viewer on twitch watch me pivot",
+            ],
+        )
 
     async def test_two_channels_rising_at_once_never_talk_over_each_other(self) -> None:
         # Pins speech *inside* chime_lock: hoisting it out, or taking the lock

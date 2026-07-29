@@ -116,13 +116,20 @@ Run `.venv/bin/youtube-live-count-chime --help` for the full command reference.
 ## Announcements and notifications
 
 A rise in the viewer count is announced out loud and also posts a macOS
-notification. Both say the same sentence — `2 new viewers on twitch
-watchmepivot` — spoken through the macOS `say` voice and used as the banner
-title. The announcement is the signal that survives streaming: OBS suppresses
+notification. One sentence is worded once — `2 new viewers on twitch
+watchmepivot` — and used verbatim as the banner title; the macOS `say` voice
+speaks a respelled rendering of it ("watch me pivot"), per the pronunciation
+table below. The announcement is the signal that survives streaming: OBS suppresses
 notification banners while it captures the screen, so while you are live the
 banner never displays, but audio is not suppressed.
 
 The order on a rise is chime, then announcement, then banner.
+
+Spoken handles first go through a small pronunciation table in `digest.py`, so
+`say` reads `watchmepivot` as "watch me pivot" and an underscore as a pause
+rather than as noise. Only the voice is changed: the banner keeps the real
+handle, which is what matches the channel and what you would search for. To add
+a channel, add one `"handle": "spoken form"` entry to `_SPOKEN_HANDLES`.
 
 Any change holds the audio for every watched channel while it plays, so two
 channels changing at once never overlap. A fall holds it for the chime alone,
