@@ -124,6 +124,12 @@ banner never displays, but audio is not suppressed.
 
 The order on a rise is chime, then announcement, then banner.
 
+Spoken handles first go through a small pronunciation table in `digest.py`, so
+`say` reads `watchmepivot` as "watch me pivot" and an underscore as a pause
+rather than as noise. Only the voice is changed: the banner keeps the real
+handle, which is what matches the channel and what you would search for. To add
+a channel, add one `"handle": "spoken form"` entry to `_SPOKEN_HANDLES`.
+
 Any change holds the audio for every watched channel while it plays, so two
 channels changing at once never overlap. A fall holds it for the chime alone,
 as it always has; a rise holds it for the chime and the announcement together,
