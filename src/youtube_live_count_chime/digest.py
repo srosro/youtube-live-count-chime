@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import re
 from typing import Final
 
 from youtube_live_count_chime.models import StreamTarget
@@ -26,6 +27,34 @@ def describe_rise(target: StreamTarget, delta: int) -> str:
     """
     assert delta > 0, f"describe_rise is rise-only, got {delta}"
     return f"{delta} new viewer{'s' if delta > 1 else ''} on {target.label}"
+
+
+# Handles are run-together lowercase words, and `say` renders them as noise
+# ("watchmepivot") or reads an underscore aloud. Only the voice needs the
+# repair: the banner keeps the real handle, because that is what matches the
+# channel and what a viewer would search for — "watch me pivot" written down
+# would be wrong. So `describe_rise` stays the one wording and this is a pure
+# layer over it. Explicit spellings win over the underscore rule below.
+_SPOKEN_HANDLES: Final[dict[str, str]] = {
+    "watchmepivot": "watch me pivot",
+    "samtriestobuild": "sam tries to build",
+}
+# A handle is an atom: `watchmepivot` must not fire inside `watchmepivot2` or
+# `watchmepivot-2`, which are other channels, so the guards are the handle
+# charset from `normalize_handle` rather than `\b` (which would split on `-`).
+_SPOKEN_HANDLE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?<![a-z0-9._-])(?:"
+    + "|".join(map(re.escape, _SPOKEN_HANDLES))
+    + r")(?![a-z0-9._-])"
+)
+
+
+def for_speech(text: str) -> str:
+    """Respell a line's channel handles for ``say``, leaving it otherwise intact."""
+    said = _SPOKEN_HANDLE_PATTERN.sub(
+        lambda match: _SPOKEN_HANDLES[match.group()], text
+    )
+    return said.replace("_", " ")
 
 
 def render_roster(

@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from youtube_live_count_chime.digest import describe_rise, render_roster
+from youtube_live_count_chime.digest import describe_rise, for_speech, render_roster
 from youtube_live_count_chime.models import StreamSnapshot, StreamSource, StreamTarget
 from youtube_live_count_chime.notify import NotificationError, post_notification
 from youtube_live_count_chime.sounds import SoundPlaybackError, play_sound
@@ -38,8 +38,9 @@ async def monitor(
     """Watch every source concurrently, chiming and notifying on count changes.
 
     A rise is also spoken aloud and posts a macOS notification, worded once by
-    ``describe_rise`` and used verbatim as both the spoken line and the banner
-    title. The roster of current counts is shared across consumers, so every
+    ``describe_rise`` and used as both the spoken line and the banner title —
+    the spoken copy through ``for_speech``, which respells handles the voice
+    would otherwise mangle. The roster of current counts is shared across consumers, so every
     notification carries the same fixed-shape digest of every watched channel.
     Title and body are *not* one instant: the delta is measured before the
     audio, and ``render_roster`` reads the shared counts after it, so another
@@ -117,7 +118,9 @@ async def monitor(
                         async with chime_lock:
                             await chime(config.up_sound)
                             try:
-                                await asyncio.to_thread(speak, announcement)
+                                await asyncio.to_thread(
+                                    speak, for_speech(announcement)
+                                )
                             except SpeechError as error:
                                 _LOGGER.warning(
                                     "could not speak for %s: %s", source.target.key, error

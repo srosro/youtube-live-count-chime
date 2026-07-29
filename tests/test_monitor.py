@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from youtube_live_count_chime.digest import for_speech
 from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarget
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
 from youtube_live_count_chime.notify import NotificationError
@@ -265,7 +266,9 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
         # version of this passes even with the work detached, because the
         # TaskGroup joins it before monitor() returns; two rises and steps
         # that take time are what separate the two designs.
-        a = StreamTarget(Platform.TWITCH, "chan")
+        # A handle with a pronunciation rule, so the DRY assertion below is not
+        # vacuously true.
+        a = StreamTarget(Platform.TWITCH, "watchmepivot")
         events: list[str] = []
         spoken: list[str] = []
         posted: list[str] = []
@@ -292,9 +295,10 @@ class NotificationTests(unittest.IsolatedAsyncioTestCase):
             events, ["chime", "speak", "notify", "chime", "speak", "notify"]
         )
         # The DRY contract, on the same two rises: one wording reaches both
-        # consumers, so a streamer hears exactly what the banner would have
-        # said. Two format strings drift the moment either is reworded.
-        self.assertEqual(posted, spoken)
+        # consumers, and the *only* difference is the pronunciation layer. Two
+        # format strings drift the moment either is reworded; a spoken line
+        # that skipped `for_speech` fails here too.
+        self.assertEqual(spoken, [for_speech(title) for title in posted])
 
     async def test_two_channels_rising_at_once_never_talk_over_each_other(self) -> None:
         # Pins speech *inside* chime_lock: hoisting it out, or taking the lock

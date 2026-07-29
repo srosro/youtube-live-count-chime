@@ -1,6 +1,6 @@
 import unittest
 
-from youtube_live_count_chime.digest import describe_rise, render_roster
+from youtube_live_count_chime.digest import describe_rise, for_speech, render_roster
 from youtube_live_count_chime.models import Platform, StreamTarget
 
 
@@ -17,6 +17,33 @@ class DescribeRiseTests(unittest.TestCase):
                 self.assertEqual(
                     describe_rise(TWITCH_A, delta),
                     f"{expected} on twitch watchmepivot",
+                )
+
+
+class ForSpeechTests(unittest.TestCase):
+    def test_respells_handles_and_leaves_the_rest_of_the_line_alone(self) -> None:
+        cases = (
+            ("2 new viewers on twitch plucas_pivots", "2 new viewers on twitch plucas pivots"),
+            ("2 new viewers on twitch watchmepivot", "2 new viewers on twitch watch me pivot"),
+            (
+                "2 new viewers on twitch samtriestobuild",
+                "2 new viewers on twitch sam tries to build",
+            ),
+            # No rule: through untouched.
+            ("2 new viewers on youtube srosrosr", "2 new viewers on youtube srosrosr"),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(for_speech(line), expected)
+
+    def test_a_handle_merely_containing_a_listed_one_is_not_respelled(self) -> None:
+        # `watchmepivot2` is a different channel; rewriting it would announce a
+        # name that belongs to somebody else.
+        for handle in ("watchmepivot2", "watchmepivot-2", "xwatchmepivot", "watchmepivot.tv"):
+            with self.subTest(handle=handle):
+                self.assertEqual(
+                    for_speech(f"1 new viewer on twitch {handle}"),
+                    f"1 new viewer on twitch {handle}",
                 )
 
 
