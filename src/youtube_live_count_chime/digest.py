@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-import re
 from typing import Final
 
 from youtube_live_count_chime.models import StreamTarget
@@ -39,22 +38,17 @@ _SPOKEN_HANDLES: Final[dict[str, str]] = {
     "watchmepivot": "watch me pivot",
     "samtriestobuild": "sam tries to build",
 }
-# A handle is an atom: `watchmepivot` must not fire inside `watchmepivot2` or
-# `watchmepivot-2`, which are other channels, so the guards are the handle
-# charset from `normalize_handle` rather than `\b` (which would split on `-`).
-_SPOKEN_HANDLE_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?<![a-z0-9._-])(?:"
-    + "|".join(map(re.escape, _SPOKEN_HANDLES))
-    + r")(?![a-z0-9._-])"
-)
 
 
+# Takes a `describe_rise` line, which always ends in exactly one handle: only
+# that last token is rewritten. The exact-key lookup is also what keeps a
+# handle an atom — `watchmepivot` must not fire inside `watchmepivot2` or
+# `watchmepivot-2`, which are other channels.
 def for_speech(text: str) -> str:
-    """Respell a line's channel handles for ``say``, leaving it otherwise intact."""
-    said = _SPOKEN_HANDLE_PATTERN.sub(
-        lambda match: _SPOKEN_HANDLES[match.group()], text
-    )
-    return said.replace("_", " ")
+    """Respell a line's channel handle for ``say``, leaving it otherwise intact."""
+    prefix, handle = text.rsplit(" ", 1)
+    spoken = _SPOKEN_HANDLES.get(handle, handle).replace("_", " ")
+    return f"{prefix} {spoken}"
 
 
 def render_roster(
