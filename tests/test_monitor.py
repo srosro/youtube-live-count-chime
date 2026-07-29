@@ -6,7 +6,6 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from youtube_live_count_chime.digest import for_speech
 from youtube_live_count_chime.models import Platform, StreamSnapshot, StreamTarget
 from youtube_live_count_chime.monitor import ChimeConfig, monitor
 from youtube_live_count_chime.notify import NotificationError

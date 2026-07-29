@@ -31,20 +31,16 @@ class ForSpeechTests(unittest.TestCase):
             ),
             # No rule: through untouched.
             ("2 new viewers on youtube srosrosr", "2 new viewers on youtube srosrosr"),
+            # A handle merely containing a listed one is a different channel,
+            # and rewriting it would announce somebody else's name.
+            ("1 new viewer on twitch watchmepivot2", "1 new viewer on twitch watchmepivot2"),
+            ("1 new viewer on twitch watchmepivot-2", "1 new viewer on twitch watchmepivot-2"),
+            ("1 new viewer on twitch xwatchmepivot", "1 new viewer on twitch xwatchmepivot"),
+            ("1 new viewer on twitch watchmepivot.tv", "1 new viewer on twitch watchmepivot.tv"),
         )
         for line, expected in cases:
             with self.subTest(line=line):
                 self.assertEqual(for_speech(line), expected)
-
-    def test_a_handle_merely_containing_a_listed_one_is_not_respelled(self) -> None:
-        # `watchmepivot2` is a different channel; rewriting it would announce a
-        # name that belongs to somebody else.
-        for handle in ("watchmepivot2", "watchmepivot-2", "xwatchmepivot", "watchmepivot.tv"):
-            with self.subTest(handle=handle):
-                self.assertEqual(
-                    for_speech(f"1 new viewer on twitch {handle}"),
-                    f"1 new viewer on twitch {handle}",
-                )
 
 
 class RenderRosterTests(unittest.TestCase):
